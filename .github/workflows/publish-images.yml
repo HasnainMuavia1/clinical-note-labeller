@@ -72,6 +72,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # QEMU lets the amd64 runner emit arm64 layers (Apple Silicon, ARM Windows).
+      - uses: docker/setup-qemu-action@v3
+
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
@@ -92,6 +95,7 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

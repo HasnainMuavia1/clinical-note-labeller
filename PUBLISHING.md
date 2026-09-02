@@ -16,24 +16,26 @@ ghcr.io/hasnainmuavia1/clinical-note-labeller/frontend
 Each is tagged `latest` and with the short commit SHA. If the tests fail, nothing is
 published — clients never pull a broken build.
 
-## 2. Make the packages public — ONE TIME ONLY
+## 2. Confirm the packages are public
 
-**The installer cannot work until you do this.** New GHCR packages are private by
-default, so a client machine gets `unauthorized` when it tries to pull.
+Packages published by Actions from a **public** repository inherit its visibility,
+so this normally needs no action — it was already public on the first run here.
 
-After the first successful workflow run, for each of the three packages:
-
-1. Open <https://github.com/HasnainMuavia1?tab=packages>
-2. Click the package → **Package settings**
-3. Scroll to **Danger Zone** → **Change visibility** → **Public**
-
-You only ever do this once per package. Later pushes keep the visibility.
-
-To confirm it worked, from any machine with Docker and no GitHub login:
+Verify without needing a GitHub login (a local `docker pull` can pass on stored
+credentials and hide the problem, so check the registry directly):
 
 ```bash
-docker pull ghcr.io/hasnainmuavia1/clinical-note-labeller/backend:latest
+for img in backend sandbox frontend; do
+  tok=$(curl -s "https://ghcr.io/token?scope=repository:hasnainmuavia1/clinical-note-labeller/$img:pull&service=ghcr.io" | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])')
+  curl -s -o /dev/null -w "$img %{http_code}\n" -H "Authorization: Bearer $tok" \
+    "https://ghcr.io/v2/hasnainmuavia1/clinical-note-labeller/$img/manifests/latest"
+done
 ```
+
+`200` on all three means clients can pull. Anything else means the package is
+private: open <https://github.com/HasnainMuavia1?tab=packages> → the package →
+**Package settings** → **Danger Zone** → **Change visibility** → **Public**.
+Until then the installer stops with an `unauthorized` message.
 
 ## 3. Generate the client installer
 
@@ -41,9 +43,17 @@ docker pull ghcr.io/hasnainmuavia1/clinical-note-labeller/backend:latest
 python3 tools/make_installer.py            # or --tag <commit-sha> to pin a build
 ```
 
-This reads your local `.env` and writes `dist/Clinical-Note-Labeller-Setup.bat`.
-Send that one file to the client. Nothing else — no repository, no `.env`, no
-instructions beyond "double-click it".
+This reads your local `.env` and writes two files:
+
+- `dist/Clinical-Note-Labeller-Setup.bat` — Windows
+- `dist/Clinical-Note-Labeller-Setup.command` — macOS and Linux
+
+Send the client the one for their machine. Nothing else — no repository, no
+`.env`, no instructions beyond "double-click it".
+
+macOS blocks unsigned downloaded scripts, so tell a Mac client: **right-click the
+file → Open → Open**. Once only. If the file arrives without its executable bit
+(some transfer methods strip it), `chmod +x` restores it.
 
 ### The credential trade-off, stated plainly
 
@@ -63,7 +73,22 @@ If a client should pay for their own usage instead, delete the two key lines fro
 notes it cannot classify go to the built-in approval queue for a human to label,
 and code detection, NPI lookup and filing are unaffected.
 
-`dist/` is gitignored. Never commit the generated file.
+`dist/` is gitignored. Never commit the generated files.
+
+## Architecture
+
+Images are built for **linux/amd64 and linux/arm64**, so one set of images covers:
+
+| Machine | Architecture |
+|---|---|
+| Windows PC (Intel/AMD) | amd64 |
+| Windows on ARM (Snapdragon X) | arm64 |
+| Mac with Apple Silicon (M1-M4) | arm64 |
+| Intel Mac | amd64 |
+
+Docker picks the right one automatically; nobody has to choose. The arm64 half is
+cross-built with QEMU, which is why the workflow takes longer than a single-arch
+build.
 
 ## What the client's machine does
 

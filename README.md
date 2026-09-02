@@ -40,10 +40,19 @@ A client needs one file and no configuration. Build it with:
 python3 tools/make_installer.py
 ```
 
-Send them `dist/Clinical-Note-Labeller-Setup.bat`. Double-clicking it installs Docker
-Desktop if needed, pulls the published images, starts everything, and opens the
-browser. Labelled output also appears on their disk under
-`%USERPROFILE%\ClinicalNoteLabeller\workspace`.
+That writes two files. Send whichever matches the client's machine:
+
+| Client | File | Output appears in |
+|---|---|---|
+| Windows | `dist/Clinical-Note-Labeller-Setup.bat` | `%USERPROFILE%\ClinicalNoteLabeller\workspace` |
+| macOS / Linux | `dist/Clinical-Note-Labeller-Setup.command` | `~/ClinicalNoteLabeller/workspace` |
+
+Either one installs Docker if needed, pulls the published images, starts
+everything and opens the browser. Images are published for both amd64 and arm64,
+so Intel and Apple Silicon are both native.
+
+On macOS the first launch is blocked by Gatekeeper because the file is unsigned:
+**right-click the file → Open → Open**. Only needed once.
 
 The generated file carries live API keys in plain text — read
 [PUBLISHING.md](PUBLISHING.md) before handing it out.
