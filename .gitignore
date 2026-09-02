@@ -20,13 +20,16 @@ htmlcov/
 
 # node
 node_modules/
-dist/
+/dist/
+frontend/dist/
 *.tsbuildinfo
 
 # runtime / local data
-data/
-workspace/
-logs/
+# Anchored to the repository root: an unanchored "workspace/" also matches
+# backend/app/workspace/, which silently excluded a source package.
+/data/
+/workspace/
+/logs/
 *.log
 
 # os / editor
