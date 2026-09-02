@@ -13,6 +13,19 @@ from .storage import job_root
 log = logging.getLogger(__name__)
 _settings = get_settings()
 
+STAGE_PROGRESS = {
+    "intake": 0.08,
+    "unpack": 0.16,
+    "parse": 0.32,
+    "detect_codes": 0.48,
+    "resolve_npi": 0.58,
+    "classify": 0.72,
+    "plan_placement": 0.82,
+    "approval_gate": 0.88,
+    "execute_ops": 0.94,
+    "manifest": 1.0,
+}
+
 celery_app = Celery("labeller", broker=_settings.redis_url, backend=_settings.redis_url)
 celery_app.conf.update(task_acks_late=True, worker_prefetch_multiplier=1, task_track_started=True)
 
@@ -26,8 +39,19 @@ async def _with_checkpointer(coro_factory):
         return await coro_factory(saver)
 
 
+def _file_status(record: dict, stage: str) -> str:
+    if record.get("output_path"):
+        return "filed"
+    if record.get("ok"):
+        return "parsed"
+    if stage in {"intake", "unpack"}:
+        return "pending"
+    return "unparsed"
+
+
 def _persist(job_id: str, state: dict) -> None:
     repo = get_repository()
+    stage = state.get("stage") or ""
     for record in state.get("files", []):
         repo.upsert_file(
             job_id, record["file_id"],
@@ -35,8 +59,7 @@ def _persist(job_id: str, state: dict) -> None:
             source_path=record.get("source_path", ""),
             sha256=record.get("sha256"),
             size_bytes=record.get("size_bytes", 0),
-            status=("filed" if record.get("output_path")
-                    else "parsed" if record.get("ok") else "unparsed"),
+            status=_file_status(record, stage),
             parser=record.get("parser"),
             parse_trail=record.get("parse_trail", []),
             has_codes=bool(record.get("has_codes")),
@@ -48,6 +71,23 @@ def _persist(job_id: str, state: dict) -> None:
             method=record.get("method"),
             output_path=record.get("output_path"),
         )
+
+
+def _checkpoint(job_id: str, node: str, result: dict, prior: dict) -> None:
+    """Write the node's stage, files, and an audit line so the UI can reason live."""
+    merged = {**prior, **result, "job_id": job_id}
+    stage = result.get("stage") or merged.get("stage") or "intake"
+    repo = get_repository()
+    repo.update_job(job_id, stage=stage, progress=STAGE_PROGRESS.get(stage, 0.0))
+    if merged.get("files"):
+        _persist(job_id, merged)
+    repo.audit(job_id, "agent_step", {
+        "node": node,
+        "stage": stage,
+        "file_count": len(merged.get("files") or []),
+        "ops": len(merged.get("pending_ops") or []),
+        "filenames": [f.get("filename") for f in (merged.get("files") or [])][:12],
+    })
 
 
 def _handle_interrupt(job_id: str, state: dict) -> bool:
@@ -78,8 +118,15 @@ def run_job_task(job_id: str) -> None:
     repo = get_repository()
     repo.update_job(job_id, status=JobStatus.RUNNING, stage="intake")
     try:
-        state = asyncio.run(_with_checkpointer(
-            lambda saver: run_job(job_id, job_root(job_id), saver)))
+        from .agent.graph import step_listener
+
+        token = step_listener.set(
+            lambda node, result, prior: _checkpoint(job_id, node, result, prior))
+        try:
+            state = asyncio.run(_with_checkpointer(
+                lambda saver: run_job(job_id, job_root(job_id), saver)))
+        finally:
+            step_listener.reset(token)
         _persist(job_id, state)
         if not _handle_interrupt(job_id, state):
             repo.update_job(job_id, status=JobStatus.COMPLETED, stage="manifest", progress=1.0)
@@ -95,8 +142,15 @@ def resume_job_task(job_id: str, resume_value) -> None:
     repo = get_repository()
     repo.update_job(job_id, status=JobStatus.RUNNING)
     try:
-        state = asyncio.run(_with_checkpointer(
-            lambda saver: resume_job(job_id, resume_value, saver)))
+        from .agent.graph import step_listener
+
+        token = step_listener.set(
+            lambda node, result, prior: _checkpoint(job_id, node, result, prior))
+        try:
+            state = asyncio.run(_with_checkpointer(
+                lambda saver: resume_job(job_id, resume_value, saver)))
+        finally:
+            step_listener.reset(token)
         _persist(job_id, state)
         if not _handle_interrupt(job_id, state):
             repo.update_job(job_id, status=JobStatus.COMPLETED, stage="manifest", progress=1.0)

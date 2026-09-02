@@ -111,7 +111,7 @@ say "      Configured. Web address will be http://localhost:$UI_PORT"
 
 # ---- 5. Pull and start --------------------------------------------------------
 step "[5/6] Downloading and starting the application..."
-say "      The first run downloads about 1 GB. Later runs are almost instant."
+say "      The first run downloads about 320 MB. Later runs are almost instant."
 say ""
 cd "$INSTALL_DIR" || die "Could not enter $INSTALL_DIR"
 docker compose pull || die "Could not download the application images. If this said 'denied' or 'unauthorized', the published packages are private - see PUBLISHING.md."

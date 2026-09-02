@@ -9,13 +9,10 @@ def test_version_reports_v1(client):
     assert r.json()["api_version"] == "v1"
 
 
-def test_protected_route_without_key_returns_problem_json(client):
+def test_routes_are_open_without_a_key(client):
     r = client.get("/api/v1/specialties")
-    assert r.status_code == 401
-    assert r.headers["content-type"].startswith("application/problem+json")
-    body = r.json()
-    assert body["title"] == "Unauthorized"
-    assert body["status"] == 401
+    assert r.status_code == 200
+    assert "items" in r.json()
 
 
 def test_request_id_header_is_echoed(client):

@@ -9,8 +9,12 @@ because they carry live API keys. They are written to dist/, which is gitignored
 from __future__ import annotations
 
 import argparse
+import os
 import pathlib
+import shutil
+import subprocess
 import sys
+import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 # (template, output, line-ending, executable)
@@ -21,7 +25,6 @@ TARGETS = [
      ROOT / "dist" / "Clinical-Note-Labeller-Setup.command", "\n", True),
 ]
 
-# Placeholder -> (env var, default). A None default means the value is required.
 FIELDS = {
     "@@OPENAI_API_KEY@@": ("OPENAI_API_KEY", ""),
     "@@OPENAI_MINI_MODEL_ID@@": ("OPENAI_MINI_MODEL_ID", "gpt-5.4-mini"),
@@ -43,6 +46,27 @@ def read_env(path: pathlib.Path) -> dict[str, str]:
     return values
 
 
+def _build_windows_exe(filled_bat: pathlib.Path) -> pathlib.Path | None:
+    """Cross-compile a double-click .exe that embeds the filled .bat."""
+    go = shutil.which("go")
+    if go is None:
+        return None
+    output = ROOT / "dist" / "Clinical-Note-Labeller-Setup.exe"
+    launcher_src = ROOT / "installer" / "windows-launcher" / "main.go"
+    with tempfile.TemporaryDirectory() as tmp:
+        work = pathlib.Path(tmp)
+        shutil.copy(launcher_src, work / "main.go")
+        (work / "go.mod").write_text("module cnl-setup\n\ngo 1.22\n")
+        (work / "setup.bat").write_bytes(filled_bat.read_bytes())
+        env = {**os.environ, "GOOS": "windows", "GOARCH": "amd64", "CGO_ENABLED": "0"}
+        subprocess.run(
+            [go, "build", "-trimpath", "-ldflags", "-s -w", "-o", str(output), "."],
+            cwd=work, env=env, check=True,
+        )
+    print(f"wrote {output.relative_to(ROOT)}  ({output.stat().st_size:,} bytes, PE exe)")
+    return output
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env", default=str(ROOT / ".env"))
@@ -60,6 +84,7 @@ def main() -> None:
             missing.append(name)
         values[placeholder] = value
 
+    bat_output = ROOT / "dist" / "Clinical-Note-Labeller-Setup.bat"
     for template, output, newline, executable in TARGETS:
         text = template.read_text()
         for placeholder, value in values.items():
@@ -78,6 +103,9 @@ def main() -> None:
 
         ending = "CRLF" if newline == "\r\n" else "LF"
         print(f"wrote {output.relative_to(ROOT)}  ({output.stat().st_size:,} bytes, {ending})")
+
+    exe = _build_windows_exe(bat_output)
+
     print()
     for name in ("OPENAI_API_KEY", "LLAMA_CLOUD_API_KEY"):
         value = env.get(name, "")
@@ -86,8 +114,10 @@ def main() -> None:
     if missing:
         print("\n  WARNING: no value for " + ", ".join(missing))
         print("  The app still runs; unlabelled notes go to the approval queue instead.")
-    print("\n  Windows client -> send Clinical-Note-Labeller-Setup.bat")
+    print("\n  Windows client -> send Clinical-Note-Labeller-Setup.exe  (or .bat)")
     print("  Mac client     -> send Clinical-Note-Labeller-Setup.command")
+    if exe is None:
+        print("\n  Note: .exe was not built (install Go, then re-run). The .bat is enough.")
     print("\n  These files contain live credentials. Do not commit or publish them.")
 
 

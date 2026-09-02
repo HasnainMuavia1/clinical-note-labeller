@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Approval, FileDetail, JobDetail, api } from '../api/client';
+import AgentRun from '../components/AgentRun';
 import ApprovalCard from '../components/ApprovalCard';
 import CodeEvidence from '../components/CodeEvidence';
 import FileTree from '../components/FileTree';
-import StageProgress from '../components/StageProgress';
 
 export default function JobDetailPage() {
   const { jobId = '' } = useParams();
@@ -37,9 +37,8 @@ export default function JobDetailPage() {
   if (!job) return <p>Loading…</p>;
 
   return (
-    <section>
-      <h2>Job {job.id.slice(0, 8)}</h2>
-      <StageProgress stage={job.stage} status={job.status} progress={job.progress} />
+    <section className="job-record">
+      <AgentRun jobId={jobId} showRecordLink={false} />
       {job.error && <p className="error">{job.error}</p>}
 
       {approvals.length > 0 && (
@@ -82,7 +81,9 @@ export default function JobDetailPage() {
 
       {selected && <CodeEvidence file={selected} />}
       <FileTree paths={tree} />
-      <a href={api.downloadUrl(jobId)}>Download output.zip</a>
+      <a className="download" href={api.downloadUrl(jobId)}>
+        Download output.zip
+      </a>
     </section>
   );
 }

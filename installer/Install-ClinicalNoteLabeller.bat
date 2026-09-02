@@ -136,7 +136,7 @@ echo       Configured. Web address will be http://localhost:!UI_PORT!
 
 REM ---- 5. Pull and start -----------------------------------------------------
 echo [5/6] Downloading and starting the application...
-echo       The first run downloads about 1 GB. Later runs are almost instant.
+echo       The first run downloads about 320 MB. Later runs are almost instant.
 echo.
 pushd "%INSTALL_DIR%"
 docker compose pull
@@ -212,9 +212,11 @@ set "%~2=%_p%"
 goto :eof
 
 :make_shortcut
+REM Prefer the .exe launcher when the client started from one.
+if defined CNL_LAUNCHER (set "SHORTCUT_TARGET=%CNL_LAUNCHER%") else (set "SHORTCUT_TARGET=%~f0")
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$s=(New-Object -ComObject WScript.Shell).CreateShortcut([Environment]::GetFolderPath('Desktop')+'\Clinical Note Labeller.lnk');" ^
-  "$s.TargetPath='%~f0'; $s.WorkingDirectory='%INSTALL_DIR%';" ^
+  "$s.TargetPath='%SHORTCUT_TARGET%'; $s.WorkingDirectory='%INSTALL_DIR%';" ^
   "$s.Description='Clinical Note Labeller'; $s.Save()" >nul 2>&1
 goto :eof
 

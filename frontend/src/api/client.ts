@@ -1,25 +1,5 @@
 const BASE = (import.meta as any).env?.VITE_API_BASE ?? '/api/v1';
 
-let apiKey = '';
-try {
-  apiKey = localStorage.getItem('apiKey') ?? '';
-} catch {
-  apiKey = '';
-}
-
-export function setApiKey(key: string): void {
-  apiKey = key;
-  try {
-    localStorage.setItem('apiKey', key);
-  } catch {
-    /* storage unavailable; the key still applies for this session */
-  }
-}
-
-export function getApiKey(): string {
-  return apiKey;
-}
-
 export interface Page<T> {
   items: T[];
   next_cursor: string | null;
@@ -88,9 +68,15 @@ export interface Progress {
   pending_approvals: number;
 }
 
+export interface AuditEntry {
+  id: string;
+  action: string;
+  detail: Record<string, unknown>;
+  created_at: string;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
-    'X-API-Key': apiKey,
     ...((init.headers as Record<string, string>) ?? {}),
   };
   if (init.body && !(init.body instanceof FormData)) headers['Content-Type'] = 'application/json';
@@ -138,6 +124,9 @@ export const api = {
   },
   getTree(id: string): Promise<{ root: string; paths: string[] }> {
     return request(`/jobs/${id}/tree`);
+  },
+  listAudit(id: string): Promise<Page<AuditEntry>> {
+    return request(`/jobs/${id}/audit`);
   },
   listSpecialties(): Promise<{ items: { name: string; folder: string }[] }> {
     return request('/specialties');

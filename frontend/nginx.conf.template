@@ -7,10 +7,6 @@ server {
   location /api/ {
     proxy_pass http://api:8000;
 
-    # The gateway supplies the API key so a desktop user never has to enter one.
-    # A key typed into the UI header field is overridden by this.
-    proxy_set_header X-API-Key "${APP_API_KEY}";
-
     proxy_buffering off;                 # required for SSE
     proxy_read_timeout 3600s;
     proxy_set_header X-Request-ID $request_id;

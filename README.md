@@ -23,13 +23,13 @@ cp .env.example .env      # then fill in OPENAI_API_KEY (and LLAMA_CLOUD_API_KEY
 make up                   # docker compose up --build -d
 ```
 
-- UI: http://localhost:5173 (paste your API key into the header field — `dev-key` by default)
+- UI: http://localhost:5173 (open — no login or workspace key)
 - API: http://localhost:8000/api/v1
 - OpenAPI: http://localhost:8000/docs
 - MinIO console: http://localhost:9101
 
 ```bash
-curl -s -H "X-API-Key: dev-key" -F "files=@note.pdf" http://localhost:8000/api/v1/jobs
+curl -s -F "files=@note.pdf" http://localhost:8000/api/v1/jobs
 ```
 
 ## Giving it to a client
@@ -44,7 +44,7 @@ That writes two files. Send whichever matches the client's machine:
 
 | Client | File | Output appears in |
 |---|---|---|
-| Windows | `dist/Clinical-Note-Labeller-Setup.bat` | `%USERPROFILE%\ClinicalNoteLabeller\workspace` |
+| Windows | `dist/Clinical-Note-Labeller-Setup.exe` (or `.bat`) | `%USERPROFILE%\ClinicalNoteLabeller\workspace` |
 | macOS / Linux | `dist/Clinical-Note-Labeller-Setup.command` | `~/ClinicalNoteLabeller/workspace` |
 
 Either one installs Docker if needed, pulls the published images, starts
@@ -158,7 +158,7 @@ GET  /api/v1/specialties                     the closed specialty list
 GET  /api/v1/health  /readyz  /version  /metrics
 ```
 
-`X-API-Key` auth with per-key rate limiting, RFC 7807 `application/problem+json` errors,
+Open access with a shared rate limit, RFC 7807 `application/problem+json` errors,
 `X-Request-ID` correlation, structured JSON logs, Prometheus metrics, and an isolated
 `/api/v1` router so a future v2 can co-exist.
 
@@ -180,7 +180,6 @@ See `.env.example`. Secrets are read only from the environment; nothing is hardc
 |---|---|
 | `OPENAI_API_KEY` / `OPENAI_MINI_MODEL_ID` | Classification model (default `gpt-5.4-mini`) |
 | `LLAMA_CLOUD_API_KEY` | LlamaParse fallback; without it the chain skips to OCR |
-| `API_KEYS` | Comma-separated accepted `X-API-Key` values |
 | `CODE_EVIDENCE_THRESHOLD` | Score a note must clear to be `with-codes` |
 | `SPECIALTY_CONFIDENCE_THRESHOLD` | Below this, a human is asked |
 | `LLM_BATCH_MIN_FILES` | Job size at which the Batch API takes over from sync |

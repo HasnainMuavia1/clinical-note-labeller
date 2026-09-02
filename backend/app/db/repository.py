@@ -133,6 +133,13 @@ class Repository:
             s.commit()
             return entry
 
+    def list_audit(self, job_id: str) -> list[AuditEntry]:
+        with self._sf() as s:
+            return list(s.execute(
+                select(AuditEntry).where(AuditEntry.job_id == job_id)
+                .order_by(AuditEntry.created_at, AuditEntry.id)
+            ).scalars())
+
     # npi cache ------------------------------------------------------------
     def get_npi(self, npi: str) -> NpiCache | None:
         with self._sf() as s:

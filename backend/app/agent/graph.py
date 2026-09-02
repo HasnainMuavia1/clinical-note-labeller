@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+from contextvars import ContextVar
 from itertools import pairwise
 from pathlib import Path
+from typing import Callable
 
 from langgraph.graph import END, START, StateGraph
 
 from . import nodes
 from .state import JobState
+
+# Celery sets this so the UI can stream plan/reasoning after every node.
+step_listener: ContextVar[Callable[[str, dict, JobState], None] | None] = ContextVar(
+    "step_listener", default=None,
+)
 
 NODE_ORDER = ["intake_node", "unpack_node", "parse_node", "detect_codes_node",
               "resolve_npi_node", "classify_node", "plan_placement_node",
@@ -17,7 +24,11 @@ def _delegate(name: str):
     """Look the node up at call time so tests can monkeypatch module attributes."""
 
     async def wrapper(state: JobState) -> dict:
-        return await getattr(nodes, name)(state)
+        result = await getattr(nodes, name)(state)
+        listener = step_listener.get()
+        if listener is not None:
+            listener(name, result, state)
+        return result
 
     wrapper.__name__ = name
     return wrapper

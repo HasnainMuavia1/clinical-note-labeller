@@ -16,7 +16,7 @@ from ...errors import ProblemException
 from ...security import require_api_key
 from ...storage import job_root, save_uploads
 from ...tasks import dispatch_job
-from .schemas import FileDetail, JobDetail, JobSummary, Page
+from .schemas import AuditEntryOut, FileDetail, JobDetail, JobSummary, Page
 
 router = APIRouter(tags=["jobs"], dependencies=[Depends(require_api_key)])
 
@@ -104,6 +104,17 @@ def cancel_job(job_id: str) -> JobDetail:
     repo.update_job(job_id, status=JobStatus.CANCELLED)
     repo.audit(job_id, "job_cancelled", {})
     return get_job(job_id)
+
+
+@router.get("/jobs/{job_id}/audit", response_model=Page)
+def job_audit(job_id: str) -> Page:
+    job = _job_or_404(job_id)
+    items = [
+        AuditEntryOut(id=row.id, action=row.action, detail=row.detail or {},
+                      created_at=row.created_at).model_dump()
+        for row in get_repository().list_audit(job.id)
+    ]
+    return Page(items=items, next_cursor=None)
 
 
 @router.get("/jobs/{job_id}/tree")

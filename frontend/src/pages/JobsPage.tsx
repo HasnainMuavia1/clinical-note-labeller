@@ -17,7 +17,7 @@ export default function JobsPage() {
 
   return (
     <section>
-      <h2>Jobs</h2>
+      <h2>Job log</h2>
       <table>
         <thead>
           <tr>

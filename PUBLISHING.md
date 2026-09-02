@@ -43,9 +43,9 @@ Until then the installer stops with an `unauthorized` message.
 python3 tools/make_installer.py            # or --tag <commit-sha> to pin a build
 ```
 
-This reads your local `.env` and writes two files:
+This reads your local `.env` and writes:
 
-- `dist/Clinical-Note-Labeller-Setup.bat` — Windows
+- `dist/Clinical-Note-Labeller-Setup.exe` — Windows (double-click). `.bat` is also written if you prefer a script.
 - `dist/Clinical-Note-Labeller-Setup.command` — macOS and Linux
 
 Send the client the one for their machine. Nothing else — no repository, no
@@ -57,8 +57,8 @@ file → Open → Open**. Once only. If the file arrives without its executable 
 
 ### The credential trade-off, stated plainly
 
-The generated `.bat` contains your OpenAI and LlamaParse keys in plain text. Anyone
-who opens it in Notepad can read and use them, and they will be billed to you. That
+The generated `.exe` / `.bat` contains your OpenAI and LlamaParse keys. Anyone
+who unpacks the file can read and use them, and they will be billed to you. That
 is the unavoidable cost of "the client configures nothing".
 
 Reduce the blast radius:
@@ -90,12 +90,31 @@ Docker picks the right one automatically; nobody has to choose. The arm64 half i
 cross-built with QEMU, which is why the workflow takes longer than a single-arch
 build.
 
+## Image size
+
+Measured, so the numbers here are not guesses:
+
+| | On the client's disk | Compressed download |
+|---|---|---|
+| backend | 704 MB | ~134 MB |
+| sandbox | — | ~113 MB |
+| frontend | — | ~21 MB |
+| postgres + redis | — | ~52 MB |
+| **first run total** | | **~320 MB** |
+
+Docker transfers gzipped layers, so disk size and download size are very different
+numbers — the backend is 704 MB unpacked but about 134 MB over the wire. Slimming
+the image (multi-stage build, dropping boto3 and the llama-index stack) halved the
+disk footprint but moved the download only about 5 MB, because compilers and Python
+packages compress roughly ten to one. The reasons to keep it slim are disk space on
+the client and not shipping a compiler toolchain in a runtime image, not bandwidth.
+
 ## What the client's machine does
 
 1. Installs Docker Desktop if absent (downloads ~600 MB, needs one restart).
 2. Downloads `docker-compose.prod.yml` — a single file, about 3 KB.
 3. Writes its own `.env` and picks free ports if 8000 or 5173 are taken.
-4. Pulls the images (~1 GB once) and starts six containers.
+4. Pulls the images (~320 MB compressed, once) and starts six containers.
 5. Waits for health, then opens the browser and drops a Desktop shortcut.
 
 No Python, Node, git or compiler is ever installed on the client machine. The code

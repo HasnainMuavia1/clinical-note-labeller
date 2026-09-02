@@ -65,6 +65,25 @@ def test_an_approval_interrupt_parks_the_job(repo):
     assert any(e.action == "approval_requested" for e in repo.get_job("j1").audit_entries)
 
 
+def test_checkpoint_updates_stage_progress_files_and_audit(repo):
+    tasks_module._checkpoint(
+        "j1",
+        "parse_node",
+        {"stage": "parse", "files": [
+            {"file_id": "f1", "filename": "note.txt", "ok": True, "parser": "text",
+             "parse_trail": [{"parser": "text", "ok": True}]},
+        ]},
+        {"job_id": "j1"},
+    )
+    job = repo.get_job("j1")
+    assert job.stage == "parse"
+    assert job.progress == pytest.approx(0.32)
+    assert repo.list_files("j1")[0].status == "parsed"
+    steps = [e for e in job.audit_entries if e.action == "agent_step"]
+    assert steps[-1].detail["stage"] == "parse"
+    assert steps[-1].detail["node"] == "parse_node"
+
+
 def test_a_batch_interrupt_parks_the_job_and_schedules_a_poll(repo, monkeypatch):
     scheduled = []
     monkeypatch.setattr(tasks_module.poll_batch_task, "apply_async",

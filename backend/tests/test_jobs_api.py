@@ -54,10 +54,13 @@ def test_uploaded_bytes_land_in_the_job_input_folder(api, tmp_path):
     assert (tmp_path / job_id / "input" / "note.txt").read_bytes() == b"hello"
 
 
-def test_upload_requires_authentication(api):
-    client, _, _ = api
+def test_upload_succeeds_without_a_key(api):
+    client, repo, dispatched = api
     files = [("files", ("note.txt", io.BytesIO(b"x"), "text/plain"))]
-    assert client.post("/api/v1/jobs", files=files).status_code == 401
+    r = client.post("/api/v1/jobs", files=files)
+    assert r.status_code == 202
+    assert repo.get_job(r.json()["id"]) is not None
+    assert dispatched == [r.json()["id"]]
 
 
 def test_idempotency_key_returns_the_same_job(api):
@@ -94,6 +97,17 @@ def test_file_detail_exposes_code_evidence(api):
     body = client.get("/api/v1/jobs/j1/files/f1", headers=AUTH).json()
     assert body["code_hits"][0]["code"] == "99213"
     assert body["specialty"] == "Cardiology"
+
+
+def test_audit_endpoint_lists_job_events(api):
+    client, repo, _ = api
+    repo.create_job("j1", "test-key", ["a.pdf"], None)
+    repo.audit("j1", "agent_step", {"stage": "intake", "node": "intake_node"})
+    body = client.get("/api/v1/jobs/j1/audit", headers=AUTH).json()
+    actions = [item["action"] for item in body["items"]]
+    assert "job_created" in actions or "agent_step" in actions
+    assert any(item["action"] == "agent_step" for item in body["items"])
+    assert body["items"][0]["detail"]
 
 
 def test_tree_endpoint_lists_the_output_structure(api, tmp_path):

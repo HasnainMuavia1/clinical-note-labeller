@@ -56,6 +56,13 @@ class ApprovalDecisionIn(BaseModel):
     specialties: dict[str, str] | None = None
 
 
+class AuditEntryOut(BaseModel):
+    id: str
+    action: str
+    detail: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
 class Page(BaseModel):
     items: list[Any]
     next_cursor: str | None = None
