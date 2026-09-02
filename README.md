@@ -73,6 +73,10 @@ intake → unpack → parse → detect_codes → resolve_npi → classify
 **Tesseract OCR** → `output/unparsed/`. Every hop is recorded per file as `parse_trail`, so
 you can see exactly why a file needed the expensive path.
 
+LlamaParse is called through its REST API directly rather than the official SDK,
+which would pull the entire `llama-index` stack (numpy, pillow, nltk, networkx) —
+about 155 MB — to perform one upload and one poll.
+
 Steps 1 and 3 run inside `parser-sandbox`: a container on an `internal: true` Docker network
 with no route to the internet, a read-only root filesystem, all capabilities dropped, and
 memory/pid/CPU caps. It never receives an API key. LlamaParse is called from the worker,
