@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+cpt-codes/** -text
+ict-10-codes/** -text

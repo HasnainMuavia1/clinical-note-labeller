@@ -32,6 +32,22 @@ make up                   # docker compose up --build -d
 curl -s -H "X-API-Key: dev-key" -F "files=@note.pdf" http://localhost:8000/api/v1/jobs
 ```
 
+## Giving it to a client
+
+A client needs one file and no configuration. Build it with:
+
+```bash
+python3 tools/make_installer.py
+```
+
+Send them `dist/Clinical-Note-Labeller-Setup.bat`. Double-clicking it installs Docker
+Desktop if needed, pulls the published images, starts everything, and opens the
+browser. Labelled output also appears on their disk under
+`%USERPROFILE%\ClinicalNoteLabeller\workspace`.
+
+The generated file carries live API keys in plain text — read
+[PUBLISHING.md](PUBLISHING.md) before handing it out.
+
 ## How a job runs
 
 LangGraph `StateGraph`, checkpointed in Postgres (thread id = job id), so a job survives
