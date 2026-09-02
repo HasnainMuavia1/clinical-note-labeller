@@ -9,6 +9,11 @@ tests/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.hypothesis/
 .coverage
+.coverage.*
+htmlcov/
 .migration_check.db
+*.sqlite3
 .DS_Store
+*.md

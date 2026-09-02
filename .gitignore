@@ -2,11 +2,35 @@
 .env
 .env.*
 !.env.example
+*.pem
+*.p12
+*.key
+credentials.json
+secrets/
+
+# clinical dumps / local uploads — never commit PHI or large archives
+*.zip
+*.7z
+*.rar
+*.tar
+*.tar.gz
+*.tgz
+ECW_*
+/input/
+/output/
+/extracted/
+labels.csv
+manifest.jsonl
+
+# generated installers (may embed live API keys)
+/dist/
+*.exe
 
 # python
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg
 *.egg-info/
 .eggs/
 .venv/
@@ -14,15 +38,31 @@ venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.tox/
+.nox/
+.hypothesis/
+.cache/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
 .migration_check.db
+*.sqlite3
+celerybeat-schedule
+celerybeat.pid
 
 # node
 node_modules/
-/dist/
-frontend/dist/
+/frontend/dist/
 *.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+.vite/
+.turbo/
+coverage/
 
 # runtime / local data
 # Anchored to the repository root: an unanchored "workspace/" also matches
@@ -32,12 +72,27 @@ frontend/dist/
 /logs/
 *.log
 
+# test / e2e artifacts
+playwright-report/
+test-results/
+
 # os / editor
 .DS_Store
+Thumbs.db
+Desktop.ini
+.AppleDouble
+.LSOverride
 .idea/
 .vscode/
+.cursor/
+.claude/
 *.swp
 *~
+*.orig
+*.rej
+*.bak
+*.tmp
+*.temp
 
 # docker
 docker-compose.override.yml

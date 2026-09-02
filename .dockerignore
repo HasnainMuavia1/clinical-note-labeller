@@ -1,21 +1,63 @@
+# VCS / editor
 .git
 .gitignore
+.gitattributes
+.github
+.cursor
+.claude
+.idea
+.vscode
+.DS_Store
+**/.DS_Store
+
+# docs and tooling the backend image does not need
+docs/
+*.md
+Makefile
+tools/
+installer/
+frontend/
+sandbox/
+dist/
+
+# secrets
 .env
 .env.*
+**/.env
+**/.env.*
+
+# python
 **/.venv
 **/venv
 **/__pycache__
 **/*.pyc
+**/*.pyo
 **/*.egg-info
-**/node_modules
-**/dist
 **/.pytest_cache
 **/.ruff_cache
 **/.mypy_cache
 **/.coverage
-**/.DS_Store
+**/.hypothesis
+**/.tox
+**/htmlcov
+
+# node (backend context must not ship the UI)
+**/node_modules
+**/dist
+**/.vite
+
+# runtime / local data / PHI dumps
 data/
 workspace/
 logs/
-docs/
-*.md
+*.log
+*.zip
+*.7z
+*.rar
+*.tar
+*.tar.gz
+ECW_*
+*.exe
+
+# tests are not copied into the image (backend/.dockerignore also covers this)
+backend/tests/

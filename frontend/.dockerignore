@@ -4,5 +4,13 @@ dist
 .env.*
 *.tsbuildinfo
 coverage
+.vite
+.turbo
+playwright-report
+test-results
+npm-debug.log*
 .DS_Store
 .git
+*.md
+src/**/*.test.ts
+src/**/*.test.tsx
