@@ -7,6 +7,7 @@ from app.agent.nodes import (
     detect_codes_node,
     execute_ops_node,
     intake_node,
+    manifest_node,
     parse_node,
     plan_placement_node,
     unpack_node,
@@ -112,3 +113,21 @@ async def test_execute_ops_writes_the_files(workspace):
                                   "files": [{"file_id": "f1"}]})
     assert (workspace / "output" / "with-codes" / "Cardiology" / "note.txt").exists()
     assert out["files"][0]["output_path"] == "output/with-codes/Cardiology/note.txt"
+
+
+async def test_manifest_writes_a_sibling_output_zip(workspace):
+    dest = workspace / "output" / "with-codes" / "Cardiology"
+    dest.mkdir(parents=True)
+    (dest / "note.txt").write_text("ok")
+    await manifest_node({
+        "job_id": workspace.name,
+        "root": str(workspace),
+        "files": [{
+            "file_id": "f1", "filename": "note.txt", "ok": True, "has_codes": True,
+            "specialty": "Cardiology", "confidence": 0.9, "method": "npi",
+        }],
+    })
+    zip_path = workspace.parent / f"{workspace.name}-output.zip"
+    assert zip_path.is_file()
+    with zipfile.ZipFile(zip_path) as zf:
+        assert "with-codes/Cardiology/note.txt" in zf.namelist()

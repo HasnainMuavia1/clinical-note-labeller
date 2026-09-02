@@ -29,7 +29,12 @@ if defined CNL_DATA_DIR (
     set "DATA_DIR=%~dp0ClinicalNoteLabeller"
 )
 set "DOCKER_EXE=%ProgramFiles%\Docker\Docker\Docker Desktop.exe"
-set "DOCKER_URL=https://desktop.docker.com/win/main/amd64/Docker Desktop Installer.exe"
+set "DOCKER_URL=https://desktop.docker.com/win/main/amd64/Docker%%20Desktop%%20Installer.exe"
+if defined CNL_LAUNCHER (
+    for %%I in ("%CNL_LAUNCHER%") do set "BUNDLED_DOCKER=%%~dpIdocker\DockerDesktopInstaller.exe"
+) else (
+    set "BUNDLED_DOCKER=%~dp0docker\DockerDesktopInstaller.exe"
+)
 
 echo.
 echo   ==========================================================
@@ -44,14 +49,20 @@ echo [1/6] Checking for Docker...
 where docker >nul 2>&1
 if %ERRORLEVEL% EQU 0 goto :docker_present
 
-echo       Docker is not installed. Downloading it now (about 600 MB).
-echo       This is a one-time step and can take several minutes.
-echo.
-curl.exe -L --progress-bar -o "%TEMP%\DockerDesktopInstaller.exe" "%DOCKER_URL%"
+if exist "%BUNDLED_DOCKER%" (
+    echo       Using the bundled Docker installer.
+    copy /y "%BUNDLED_DOCKER%" "%TEMP%\DockerDesktopInstaller.exe" >nul
+) else (
+    echo       Docker is not installed. Downloading it now (about 600 MB).
+    echo       This is a one-time step and can take several minutes.
+    echo.
+    curl.exe -fL --retry 3 --retry-delay 2 --progress-bar -o "%TEMP%\DockerDesktopInstaller.exe" "%DOCKER_URL%"
+)
 if not exist "%TEMP%\DockerDesktopInstaller.exe" (
     echo.
-    echo   [X] Could not download Docker Desktop. Check the internet connection
-    echo       and run this file again.
+    echo   [X] Could not get Docker Desktop. Put DockerDesktopInstaller.exe in
+    echo       a "docker" folder next to this file, or check the internet and
+    echo       run this file again.
     goto :fail
 )
 

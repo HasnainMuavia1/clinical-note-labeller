@@ -9,4 +9,7 @@ __pycache__/
 .DS_Store
 .git
 *.md
+*.zip
+*.exe
+*.dmg
 tests/

@@ -18,7 +18,7 @@ from ..specialty.npi import resolve_specialty_from_npis
 from ..specialty.taxonomy import UNCLASSIFIED, folder_name, normalize_specialty
 from ..workspace.archive import ArchiveError, extract_archive
 from ..workspace.filetools import FileOp, GuardedFileTools
-from ..workspace.manifest import write_labels_csv, write_manifest
+from ..workspace.manifest import write_labels_csv, write_manifest, write_output_zip
 from .approvals import approval_payload
 from .pool import map_files
 from .state import JobState
@@ -297,4 +297,5 @@ async def manifest_node(state: JobState) -> dict:
         })
     write_manifest(root / "output" / "manifest.jsonl", records)
     write_labels_csv(root / "output" / "labels.csv", records)
+    write_output_zip(root / "output", root.parent / f"{root.name}-output.zip")
     return {"manifest": records, "stage": "manifest"}

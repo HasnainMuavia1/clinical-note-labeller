@@ -19,6 +19,12 @@ installer/
 frontend/
 sandbox/
 dist/
+installer/docker/*.exe
+installer/docker/*.dmg
+*.dmg
+*.iso
+*.part
+Clinical-Note-Labeller-*
 
 # secrets
 .env
@@ -58,6 +64,10 @@ logs/
 *.tar.gz
 ECW_*
 *.exe
+*.msi
+*.pkg
+*.dmg
+*.iso
 
 # tests are not copied into the image (backend/.dockerignore also covers this)
 backend/tests/

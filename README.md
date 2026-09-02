@@ -71,8 +71,12 @@ workspace/<upload-name>/          # ECW_zip.zip → workspace/ECW_zip/
   logs/audit.jsonl
 ```
 
-Open `workspace/<job_id>/output/` in Finder when a job finishes. Download in the
-UI is only a convenience zip of that same tree.
+When a job finishes you get both:
+
+- `workspace/<upload-name>/output/` — the labelled folder tree
+- `workspace/<upload-name>-output.zip` — the same tree as a zip
+
+Download in the UI serves that zip.
 
 ## How a job runs
 

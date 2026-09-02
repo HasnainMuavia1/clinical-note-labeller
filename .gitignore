@@ -25,6 +25,17 @@ manifest.jsonl
 # generated installers (may embed live API keys)
 /dist/
 *.exe
+*.msi
+*.pkg
+Clinical-Note-Labeller-*
+
+# official Docker Desktop installers — too large for git (~600 MB each)
+*.dmg
+*.iso
+*.part
+/installer/docker/*.exe
+/installer/docker/*.dmg
+/installer/docker/*.part
 
 # python
 __pycache__/

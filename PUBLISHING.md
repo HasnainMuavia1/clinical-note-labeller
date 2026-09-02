@@ -48,8 +48,13 @@ This reads your local `.env` and writes:
 - `dist/Clinical-Note-Labeller-Setup.exe` — Windows (double-click). `.bat` is also written if you prefer a script.
 - `dist/Clinical-Note-Labeller-Setup.command` — macOS and Linux
 
-Send the client the one for their machine. Nothing else — no repository, no
-`.env`, no instructions beyond "double-click it".
+Send the client the one for their machine, plus the `dist/docker/` folder if
+you ran `python3 tools/fetch_docker_installers.py` first. That folder holds
+the official Docker Desktop installers so the client does not download them
+(the Windows URL with a space in the name is what used to fail as
+`curl: (3) URL rejected`).
+
+If `docker/` is missing, setup still downloads Docker itself.
 
 macOS blocks unsigned downloaded scripts, so tell a Mac client: **right-click the
 file → Open → Open**. Once only. If the file arrives without its executable bit

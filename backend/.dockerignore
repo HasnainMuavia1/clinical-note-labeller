@@ -17,3 +17,7 @@ htmlcov/
 *.sqlite3
 .DS_Store
 *.md
+*.zip
+*.exe
+*.dmg
+*.iso

@@ -46,14 +46,27 @@ if ! command -v docker >/dev/null 2>&1; then
         die "Docker is not installed. Install Docker Engine for your distribution, then run this file again."
     fi
 
-    say "      Docker is not installed. Downloading it (about 600 MB)."
-    say "      This is a one-time step and can take several minutes."
     case "$(uname -m)" in
-        arm64) DMG_URL="https://desktop.docker.com/mac/main/arm64/Docker.dmg" ;;
-        *)     DMG_URL="https://desktop.docker.com/mac/main/amd64/Docker.dmg" ;;
+        arm64)
+            BUNDLED_DOCKER="$SCRIPT_DIR/docker/Docker-arm64.dmg"
+            DMG_URL="https://desktop.docker.com/mac/main/arm64/Docker.dmg"
+            ;;
+        *)
+            BUNDLED_DOCKER="$SCRIPT_DIR/docker/Docker-amd64.dmg"
+            DMG_URL="https://desktop.docker.com/mac/main/amd64/Docker.dmg"
+            ;;
     esac
+    [ -f "$BUNDLED_DOCKER" ] || BUNDLED_DOCKER="$SCRIPT_DIR/docker/Docker.dmg"
 
-    curl -fL --progress-bar -o /tmp/Docker.dmg "$DMG_URL" || die "Could not download Docker Desktop. Check the internet connection."
+    if [ -f "$BUNDLED_DOCKER" ]; then
+        say "      Using the bundled Docker installer."
+        cp "$BUNDLED_DOCKER" /tmp/Docker.dmg || die "Could not copy the bundled Docker installer."
+    else
+        say "      Docker is not installed. Downloading it (about 600 MB)."
+        say "      This is a one-time step and can take several minutes."
+        curl -fL --retry 3 --retry-delay 2 --progress-bar -o /tmp/Docker.dmg "$DMG_URL" \
+            || die "Could not download Docker Desktop. Put Docker-arm64.dmg or Docker-amd64.dmg in a docker/ folder next to this file, or check the internet."
+    fi
 
     say "      Installing. You will be asked for your Mac password."
     hdiutil attach -nobrowse -quiet /tmp/Docker.dmg || die "Could not open the Docker disk image."

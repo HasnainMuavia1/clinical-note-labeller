@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import zipfile
 from pathlib import Path
 
 CSV_COLUMNS = ["file_id", "filename", "source_path", "codes_branch", "specialty",
@@ -24,3 +25,17 @@ def write_labels_csv(path: Path, records: list[dict]) -> None:
             row = {key: record.get(key, "") for key in CSV_COLUMNS}
             row["code_count"] = len(record.get("code_hits") or [])
             writer.writerow(row)
+
+
+def write_output_zip(output_dir: Path, zip_path: Path) -> Path | None:
+    """Pack labelled output into <upload-name>-output.zip next to the job folder."""
+    if not output_dir.is_dir():
+        return None
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = zip_path.with_suffix(zip_path.suffix + ".part")
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path in sorted(output_dir.rglob("*")):
+            if path.is_file() and path.suffix != ".part":
+                zf.write(path, path.relative_to(output_dir).as_posix())
+    tmp.replace(zip_path)
+    return zip_path

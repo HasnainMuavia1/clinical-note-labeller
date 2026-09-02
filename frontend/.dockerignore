@@ -12,5 +12,8 @@ npm-debug.log*
 .DS_Store
 .git
 *.md
+*.zip
+*.exe
+*.dmg
 src/**/*.test.ts
 src/**/*.test.tsx

@@ -176,9 +176,14 @@ def job_tree(job_id: str) -> dict:
 
 
 @router.get("/jobs/{job_id}/download")
-def download_results(job_id: str) -> StreamingResponse:
+def download_results(job_id: str) -> FileResponse | StreamingResponse:
     _job_or_404(job_id)
-    output = job_root(job_id) / "output"
+    root = job_root(job_id)
+    ready = root.parent / f"{root.name}-output.zip"
+    if ready.is_file():
+        return FileResponse(ready, media_type="application/zip",
+                            filename=f"{job_id}-output.zip")
+    output = root / "output"
     if not output.exists():
         raise ProblemException(409, "Conflict", "This job has no output yet.")
 

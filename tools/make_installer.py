@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 # (template, output, line-ending, executable)
@@ -44,6 +45,75 @@ def read_env(path: pathlib.Path) -> dict[str, str]:
         key, _, value = line.partition("=")
         values[key.strip()] = value.strip()
     return values
+
+
+def _copy_bundled_docker() -> None:
+    """Copy official Docker installers next to the generated setup files."""
+    src = ROOT / "installer" / "docker"
+    dest = ROOT / "dist" / "docker"
+    if not src.is_dir():
+        print("  (no installer/docker/ bundle — clients will download Docker)")
+        return
+    dest.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for path in src.iterdir():
+        if path.suffix.lower() not in {".exe", ".dmg"}:
+            continue
+        target = dest / path.name
+        shutil.copy2(path, target)
+        copied += 1
+        print(f"wrote {target.relative_to(ROOT)}  ({target.stat().st_size:,} bytes)")
+    if copied:
+        print("  Send the docker/ folder next to the setup file so Docker is offline.")
+    else:
+        print("  (installer/docker/ is empty — run tools/fetch_docker_installers.py)")
+
+
+def _zip_files(zip_path: pathlib.Path, items: list[tuple[pathlib.Path, str]]) -> None:
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as zf:
+        for source, arcname in items:
+            if source.is_file():
+                zf.write(source, arcname)
+
+
+def _write_client_zips(exe: pathlib.Path | None) -> None:
+    """One unzip-and-run pack per platform, with the matching Docker installer."""
+    docker = ROOT / "installer" / "docker"
+    dist = ROOT / "dist"
+    bat = dist / "Clinical-Note-Labeller-Setup.bat"
+    command = dist / "Clinical-Note-Labeller-Setup.command"
+    note = "Keep the docker folder next to the setup file, then double-click setup."
+
+    win_items: list[tuple[pathlib.Path, str]] = []
+    if exe and exe.is_file():
+        win_items.append((exe, "Clinical-Note-Labeller-Windows/Clinical-Note-Labeller-Setup.exe"))
+    if bat.is_file():
+        win_items.append((bat, "Clinical-Note-Labeller-Windows/Clinical-Note-Labeller-Setup.bat"))
+    win_docker = docker / "DockerDesktopInstaller.exe"
+    if win_docker.is_file():
+        win_items.append((win_docker, "Clinical-Note-Labeller-Windows/docker/DockerDesktopInstaller.exe"))
+    win_note = dist / "Windows-README.txt"
+    win_note.write_text(note + "\n", encoding="utf-8")
+    win_items.append((win_note, "Clinical-Note-Labeller-Windows/README.txt"))
+    win_zip = dist / "Clinical-Note-Labeller-Windows.zip"
+    _zip_files(win_zip, win_items)
+    print(f"wrote {win_zip.relative_to(ROOT)}  ({win_zip.stat().st_size:,} bytes)")
+
+    mac_items: list[tuple[pathlib.Path, str]] = []
+    if command.is_file():
+        mac_items.append((command, "Clinical-Note-Labeller-Mac/Clinical-Note-Labeller-Setup.command"))
+    for dmg in ("Docker-arm64.dmg", "Docker-amd64.dmg"):
+        path = docker / dmg
+        if path.is_file():
+            mac_items.append((path, f"Clinical-Note-Labeller-Mac/docker/{dmg}"))
+    mac_note = dist / "Mac-README.txt"
+    mac_note.write_text(
+        note + " On a Mac: right-click the .command → Open → Open.\n", encoding="utf-8")
+    mac_items.append((mac_note, "Clinical-Note-Labeller-Mac/README.txt"))
+    mac_zip = dist / "Clinical-Note-Labeller-Mac.zip"
+    _zip_files(mac_zip, mac_items)
+    print(f"wrote {mac_zip.relative_to(ROOT)}  ({mac_zip.stat().st_size:,} bytes)")
 
 
 def _build_windows_exe(filled_bat: pathlib.Path) -> pathlib.Path | None:
@@ -105,6 +175,8 @@ def main() -> None:
         print(f"wrote {output.relative_to(ROOT)}  ({output.stat().st_size:,} bytes, {ending})")
 
     exe = _build_windows_exe(bat_output)
+    _copy_bundled_docker()
+    _write_client_zips(exe)
 
     print()
     for name in ("OPENAI_API_KEY", "LLAMA_CLOUD_API_KEY"):
@@ -114,8 +186,8 @@ def main() -> None:
     if missing:
         print("\n  WARNING: no value for " + ", ".join(missing))
         print("  The app still runs; unlabelled notes go to the approval queue instead.")
-    print("\n  Windows client -> send Clinical-Note-Labeller-Setup.exe  (or .bat)")
-    print("  Mac client     -> send Clinical-Note-Labeller-Setup.command")
+    print("\n  Windows client -> send Clinical-Note-Labeller-Windows.zip")
+    print("  Mac client     -> send Clinical-Note-Labeller-Mac.zip")
     if exe is None:
         print("\n  Note: .exe was not built (install Go, then re-run). The .bat is enough.")
     print("\n  These files contain live credentials. Do not commit or publish them.")
