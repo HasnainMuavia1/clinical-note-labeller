@@ -13,6 +13,8 @@ class JobSummary(BaseModel):
     progress: float
     created_at: datetime
     file_count: int = 0
+    files_done: int = 0
+    files_total: int = 0
 
 
 class FileDetail(BaseModel):

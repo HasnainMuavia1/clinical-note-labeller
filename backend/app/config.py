@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_mini_model_id: str = "gpt-5.4-mini"
     llama_cloud_api_key: str | None = None
+    llama_parse_tier: str = "standard"
 
     # NoDecode: pydantic-settings would otherwise JSON-decode the env value before
     # the validator below gets to split the comma-separated form.
@@ -31,6 +32,7 @@ class Settings(BaseSettings):
     code_evidence_threshold: float = 1.0
     specialty_confidence_threshold: float = 0.65
     llm_batch_min_files: int = 10
+    file_concurrency: int = 12
     max_upload_bytes: int = 5 * 1024**3
 
     @field_validator("api_keys", mode="before")

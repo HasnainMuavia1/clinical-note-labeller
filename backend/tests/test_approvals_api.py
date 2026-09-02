@@ -34,8 +34,11 @@ def api(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
 
     from app.main import create_app
+    from app.security import reset_rate_limit
 
+    reset_rate_limit()
     yield TestClient(create_app(), raise_server_exceptions=False), repo, resumed
+    reset_rate_limit()
     get_settings.cache_clear()
 
 

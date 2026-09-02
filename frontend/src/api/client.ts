@@ -12,6 +12,8 @@ export interface JobSummary {
   progress: number;
   created_at: string;
   file_count: number;
+  files_done?: number;
+  files_total?: number;
 }
 
 export interface JobDetail extends JobSummary {
@@ -66,6 +68,8 @@ export interface Progress {
   stage: string;
   progress: number;
   pending_approvals: number;
+  files_done?: number;
+  files_total?: number;
 }
 
 export interface AuditEntry {

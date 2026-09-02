@@ -111,6 +111,8 @@ type JobLike = {
   status?: string;
   stage?: string;
   file_count?: number;
+  files_done?: number;
+  files_total?: number;
   original_filenames?: string[];
   pending_approvals?: number;
   error?: string | null;
@@ -147,9 +149,18 @@ export function reasoningFor(stage: string, job: JobLike = {}): Reasoning {
   const names = namesOf(job);
   const files = job.files ?? [];
   const fileLabel = names.length ? names.join(', ') : `${job.file_count ?? 0} file(s)`;
+  const doneCount = job.files_done ?? files.filter((file) => file.status && file.status !== 'pending').length;
+  const totalCount = job.files_total || job.file_count || files.length || names.length;
+  const countLabel = totalCount ? `${doneCount} of ${totalCount} notes` : fileLabel;
 
   if (job.status === 'failed' && job.error) {
     return { headline: 'Run failed', detail: job.error };
+  }
+  if (job.status === 'completed') {
+    return {
+      headline: `Manifest — ${countLabel} filed`,
+      detail: 'The labelling graph finished. Notes are in the output tree with specialties, codes, and the manifest.',
+    };
   }
 
   switch (stage) {
@@ -164,15 +175,15 @@ export function reasoningFor(stage: string, job: JobLike = {}): Reasoning {
         detail: `Opening ZIP members for ${fileLabel}. Path-escaping entries are refused and audited.`,
       };
     case 'parse': {
-      const trails = files.flatMap((file) => file.parse_trail ?? []);
-      const ok = trails.filter((attempt) => attempt.ok).length;
+      const latest = [...files].reverse().find((file) => (file.parse_trail ?? []).length);
+      const trails = latest?.parse_trail ?? [];
       const lastFail = trails.find((attempt) => !attempt.ok);
       const chain = trails.map((attempt) => attempt.parser).filter(Boolean).join(' → ') || 'pypdf → LlamaParse → OCR';
       return {
-        headline: 'Parse — extracting text',
+        headline: `Parse — ${countLabel}`,
         detail: lastFail?.reason
-          ? `${chain}. ${ok} hop(s) succeeded. Last miss: ${lastFail.reason}.`
-          : `Running ${chain} on ${fileLabel}.`,
+          ? `${chain} on ${latest?.filename ?? 'the latest note'}. Last miss: ${lastFail.reason}.`
+          : `Running ${chain}. Finished ${countLabel}.`,
       };
     }
     case 'detect_codes': {
@@ -180,14 +191,14 @@ export function reasoningFor(stage: string, job: JobLike = {}): Reasoning {
       const rejected = files.flatMap((file) => file.code_rejected ?? []);
       const hitList = hits.map((hit) => hit.code).filter(Boolean).slice(0, 6).join(', ') || 'none yet';
       return {
-        headline: 'Coding — scoring candidates',
+        headline: `Coding — ${countLabel}`,
         detail: `Accepted ${hits.length} (${hitList}). Rejected ${rejected.length} lookalikes (ZIP, dates, vitals) that matched a code shape without evidence.`,
       };
     }
     case 'resolve_npi': {
       const npis = files.flatMap((file) => file.npis ?? []);
       return {
-        headline: 'NPI — resolving provider specialty',
+        headline: `NPI — ${countLabel}`,
         detail: npis.length
           ? `Looking up ${npis.join(', ')} on NPPES and mapping taxonomy to a specialty.`
           : 'No valid NPIs in this batch; specialty will come from the classifier.',
@@ -236,6 +247,7 @@ export function reasoningFor(stage: string, job: JobLike = {}): Reasoning {
 
 export function buildTape(job: JobLike, files: FileLike[], audits: AuditLike[]): TapeEntry[] {
   const combined: JobLike = { ...job, files, original_filenames: job.original_filenames ?? namesOf(job) };
+  const recentFileTicks = new Set(audits.filter((entry) => entry.action === 'file_progress').slice(-8));
   const tape: TapeEntry[] = [
     {
       kind: 'plan',
@@ -268,6 +280,22 @@ export function buildTape(job: JobLike, files: FileLike[], audits: AuditLike[]):
         agent: step?.agent ?? String(entry.detail.node ?? 'agent'),
         headline: reasoned.headline,
         detail: reasoned.detail,
+        at: entry.created_at,
+      });
+      continue;
+    }
+    if (entry.action === 'file_progress') {
+      if (!recentFileTicks.has(entry)) continue;
+      const stage = String(entry.detail.stage ?? '');
+      const done = Number(entry.detail.done ?? 0);
+      const total = Number(entry.detail.total ?? 0);
+      const filename = String(entry.detail.filename ?? 'note');
+      tape.push({
+        kind: 'step',
+        stage,
+        agent: stepById(stage)?.agent ?? 'Agent',
+        headline: `${stepById(stage)?.title ?? stage} — ${done} of ${total}`,
+        detail: `Finished ${filename}.`,
         at: entry.created_at,
       });
       continue;

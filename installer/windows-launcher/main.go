@@ -25,11 +25,16 @@ func main() {
 	}
 
 	self, _ := os.Executable()
+	dataDir := filepath.Join(filepath.Dir(self), "ClinicalNoteLabeller")
+	if err := os.MkdirAll(filepath.Join(dataDir, "workspace"), 0o755); end(err) {
+		return
+	}
+
 	cmd := exec.Command("cmd", "/c", bat)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(), "CNL_LAUNCHER="+self)
+	cmd.Env = append(os.Environ(), "CNL_LAUNCHER="+self, "CNL_DATA_DIR="+dataDir)
 	if err := cmd.Run(); err != nil {
 		if exit, ok := err.(*exec.ExitError); ok {
 			os.Exit(exit.ExitCode())

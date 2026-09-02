@@ -32,8 +32,11 @@ def api(monkeypatch, tmp_path):
     monkeypatch.setenv("API_KEYS", "test-key")
 
     from app.main import create_app
+    from app.security import reset_rate_limit
 
+    reset_rate_limit()
     yield TestClient(create_app(), raise_server_exceptions=False), repo, dispatched
+    reset_rate_limit()
     get_settings.cache_clear()
 
 
@@ -45,6 +48,29 @@ def test_upload_creates_a_job_and_dispatches_it(api):
     job_id = r.json()["id"]
     assert repo.get_job(job_id) is not None
     assert dispatched == [job_id]
+
+
+def test_job_id_is_the_uploaded_filename_stem(api):
+    client, repo, dispatched = api
+    files = [("files", ("ECW_zip.zip", io.BytesIO(b"PK"), "application/zip"))]
+    r = client.post("/api/v1/jobs", files=files, headers=AUTH)
+    assert r.status_code == 202
+    assert r.json()["id"] == "ECW_zip"
+    assert dispatched == ["ECW_zip"]
+    assert repo.get_job("ECW_zip") is not None
+
+
+def test_reuploading_the_same_name_gets_a_numeric_suffix(api, tmp_path):
+    client, _, dispatched = api
+    files = [("files", ("ECW_zip.zip", io.BytesIO(b"PK"), "application/zip"))]
+    first = client.post("/api/v1/jobs", files=files, headers=AUTH).json()["id"]
+    files = [("files", ("ECW_zip.zip", io.BytesIO(b"PK"), "application/zip"))]
+    second = client.post("/api/v1/jobs", files=files, headers=AUTH).json()["id"]
+    assert first == "ECW_zip"
+    assert second == "ECW_zip__2"
+    assert (tmp_path / "ECW_zip" / "input" / "ECW_zip.zip").exists()
+    assert (tmp_path / "ECW_zip__2" / "input" / "ECW_zip.zip").exists()
+    assert dispatched == ["ECW_zip", "ECW_zip__2"]
 
 
 def test_uploaded_bytes_land_in_the_job_input_folder(api, tmp_path):
@@ -79,6 +105,52 @@ def test_list_jobs_returns_a_paginated_envelope(api):
     repo.create_job("j1", "test-key", ["a.pdf"], None)
     body = client.get("/api/v1/jobs?limit=1", headers=AUTH).json()
     assert "items" in body and "next_cursor" in body
+
+
+def test_job_payload_includes_files_done_and_total(api):
+    client, repo, _ = api
+    repo.create_job("j1", "test-key", ["a.pdf", "b.pdf"], None)
+    repo.upsert_file("j1", "f1", filename="a.pdf", source_path="a.pdf", status="parsed")
+    repo.upsert_file("j1", "f2", filename="b.pdf", source_path="b.pdf", status="pending")
+    body = client.get("/api/v1/jobs/j1", headers=AUTH).json()
+    assert body["files_done"] == 1
+    assert body["files_total"] == 2
+
+
+def test_list_files_hides_stale_duplicates_and_the_zip_shell(api):
+    client, repo, _ = api
+    repo.create_job("j1", "test-key", ["notes.zip"], None)
+    repo.upsert_file("j1", "zip", filename="notes.zip", source_path="notes.zip", status="pending")
+    repo.upsert_file("j1", "old", filename="a.pdf", source_path="notes.zip!/a.pdf", status="pending")
+    repo.upsert_file(
+        "j1", "new", filename="a.pdf", source_path="notes.zip!/a.pdf", status="filed",
+        specialty="Cardiology", method="llm_batch", confidence=0.9, has_codes=True,
+    )
+    body = client.get("/api/v1/jobs/j1/files", headers=AUTH).json()
+    assert [row["filename"] for row in body["items"]] == ["a.pdf"]
+    assert body["items"][0]["specialty"] == "Cardiology"
+    assert body["items"][0]["status"] == "filed"
+
+
+def test_file_counts_dedupe_the_same_note_after_a_reparse(api):
+    client, repo, _ = api
+    repo.create_job("j1", "test-key", ["notes.zip"], None)
+    repo.upsert_file("j1", "old", filename="a.pdf", source_path="notes.zip!/a.pdf", status="pending")
+    repo.upsert_file("j1", "new", filename="a.pdf", source_path="notes.zip!/a.pdf", status="parsed")
+    repo.upsert_file("j1", "b", filename="b.pdf", source_path="notes.zip!/b.pdf", status="pending")
+    body = client.get("/api/v1/jobs/j1", headers=AUTH).json()
+    assert body["files_done"] == 1
+    assert body["files_total"] == 2
+
+
+def test_completed_job_payload_shows_manifest_at_100(api):
+    client, repo, _ = api
+    repo.create_job("j1", "test-key", ["a.pdf"], None)
+    repo.update_job("j1", status="completed", stage="parse", progress=0.19)
+    body = client.get("/api/v1/jobs/j1", headers=AUTH).json()
+    assert body["status"] == "completed"
+    assert body["stage"] == "manifest"
+    assert body["progress"] == 1.0
 
 
 def test_get_unknown_job_returns_problem_json(api):

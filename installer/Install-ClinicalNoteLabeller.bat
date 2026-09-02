@@ -20,7 +20,14 @@ set "LLAMA_CLOUD_API_KEY=@@LLAMA_CLOUD_API_KEY@@"
 set "APP_API_KEY=@@APP_API_KEY@@"
 
 set "INSTALL_DIR=%LOCALAPPDATA%\ClinicalNoteLabeller"
-set "DATA_DIR=%USERPROFILE%\ClinicalNoteLabeller"
+REM Results live next to the .bat / .exe the client double-clicked, not in a hidden profile folder.
+if defined CNL_DATA_DIR (
+    set "DATA_DIR=%CNL_DATA_DIR%"
+) else if defined CNL_LAUNCHER (
+    for %%I in ("%CNL_LAUNCHER%") do set "DATA_DIR=%%~dpIClinicalNoteLabeller"
+) else (
+    set "DATA_DIR=%~dp0ClinicalNoteLabeller"
+)
 set "DOCKER_EXE=%ProgramFiles%\Docker\Docker\Docker Desktop.exe"
 set "DOCKER_URL=https://desktop.docker.com/win/main/amd64/Docker Desktop Installer.exe"
 

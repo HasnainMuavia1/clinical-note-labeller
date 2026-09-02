@@ -10,17 +10,60 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from pathlib import Path
 
 import httpx
 
 from ..config import get_settings
+from .rate_limit import SlidingWindowLimiter, limits_for_tier
 
 BASE_URL = "https://api.cloud.llamaindex.ai/api/v1/parsing"
 UPLOAD_TIMEOUT = httpx.Timeout(300.0, connect=15.0)
 POLL_TIMEOUT = httpx.Timeout(60.0, connect=15.0)
-POLL_INTERVAL_SECONDS = 3.0
+POLL_INTERVAL_SECONDS = 1.0
 MAX_POLL_SECONDS = 900
+RETRY_STATUSES = {429, 500, 502, 503, 504}
+MAX_RETRIES = 6
+
+_limiter: SlidingWindowLimiter | None = None
+
+
+def reset_upload_limiter() -> None:
+    global _limiter
+    _limiter = None
+
+
+def get_upload_limiter() -> SlidingWindowLimiter:
+    global _limiter
+    max_requests, window = limits_for_tier(get_settings().llama_parse_tier)
+    if _limiter is None or _limiter.max_requests != max_requests or _limiter.window_seconds != window:
+        _limiter = SlidingWindowLimiter(max_requests, window)
+    return _limiter
+
+
+async def _request_with_backoff(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    *,
+    limit: bool = False,
+    **kwargs,
+) -> httpx.Response:
+    delay = 1.0
+    response: httpx.Response | None = None
+    for attempt in range(MAX_RETRIES):
+        if limit:
+            await get_upload_limiter().acquire()
+        response = await client.request(method, url, **kwargs)
+        if response.status_code not in RETRY_STATUSES:
+            return response
+        if attempt == MAX_RETRIES - 1:
+            break
+        await asyncio.sleep(delay * (0.5 + random.random()))
+        delay = min(delay * 2, 32)
+    assert response is not None
+    return response
 
 
 class LlamaParseError(RuntimeError):
@@ -37,8 +80,11 @@ async def llamaparse_text(path: Path) -> str:
                "accept": "application/json"}
 
     async with httpx.AsyncClient(timeout=UPLOAD_TIMEOUT, headers=headers) as client:
-        with path.open("rb") as fh:
-            response = await client.post(f"{BASE_URL}/upload", files={"file": (path.name, fh)})
+        payload = path.read_bytes()
+        response = await _request_with_backoff(
+            client, "POST", f"{BASE_URL}/upload",
+            limit=True, files={"file": (path.name, payload)},
+        )
         if response.status_code >= 400:
             raise LlamaParseError(f"upload failed: HTTP {response.status_code} {response.text[:200]}")
 
@@ -49,7 +95,11 @@ async def llamaparse_text(path: Path) -> str:
         client.timeout = POLL_TIMEOUT
         waited = 0.0
         while waited < MAX_POLL_SECONDS:
-            status_response = await client.get(f"{BASE_URL}/job/{job_id}")
+            status_response = await _request_with_backoff(
+                client, "GET", f"{BASE_URL}/job/{job_id}")
+            if status_response.status_code >= 400:
+                raise LlamaParseError(
+                    f"status failed: HTTP {status_response.status_code}")
             status = (status_response.json().get("status") or "").upper()
             if status in {"SUCCESS", "COMPLETED", "PARTIAL_SUCCESS"}:
                 break
@@ -60,7 +110,8 @@ async def llamaparse_text(path: Path) -> str:
         else:
             raise LlamaParseError(f"job {job_id} did not finish within {MAX_POLL_SECONDS}s")
 
-        result = await client.get(f"{BASE_URL}/job/{job_id}/result/text")
+        result = await _request_with_backoff(
+            client, "GET", f"{BASE_URL}/job/{job_id}/result/text")
         if result.status_code >= 400:
             raise LlamaParseError(f"result fetch failed: HTTP {result.status_code}")
         return result.json().get("text", "")

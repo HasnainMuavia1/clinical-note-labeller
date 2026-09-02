@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -19,6 +20,7 @@ from ..workspace.archive import ArchiveError, extract_archive
 from ..workspace.filetools import FileOp, GuardedFileTools
 from ..workspace.manifest import write_labels_csv, write_manifest
 from .approvals import approval_payload
+from .pool import map_files
 from .state import JobState
 
 log = logging.getLogger(__name__)
@@ -109,47 +111,56 @@ async def unpack_node(state: JobState) -> dict:
 
 
 async def parse_node(state: JobState) -> dict:
-    files = []
-    for record in state.get("files", []):
+    async def work(record: dict) -> dict:
         if record.get("ok"):
-            files.append(record)
-            continue
+            return record
         parsed = await parse_document(Path(record["path"]))
-        files.append({**record, "text": parsed.text, "parser": parsed.parser, "ok": parsed.ok,
-                      "parse_trail": [{"parser": a.parser, "ok": a.ok, "reason": a.reason}
-                                      for a in parsed.trail]})
+        return {**record, "text": parsed.text, "parser": parsed.parser, "ok": parsed.ok,
+                "parse_trail": [{"parser": a.parser, "ok": a.ok, "reason": a.reason}
+                                for a in parsed.trail]}
+
+    files = await map_files(
+        state.get("files", []), work, stage="parse",
+        concurrency=get_settings().file_concurrency,
+    )
     return {"files": files, "stage": "parse"}
 
 
 async def detect_codes_node(state: JobState) -> dict:
     dicts = get_dictionaries()
     threshold = get_settings().code_evidence_threshold
-    files = []
-    for record in state.get("files", []):
+
+    async def work(record: dict) -> dict:
         if not record.get("ok"):
-            files.append(record)
-            continue
-        result = detect_codes(record.get("text", ""), dicts, threshold)
-        files.append({**record,
-                      "has_codes": result.has_codes,
-                      "code_hits": [h.__dict__ for h in result.hits],
-                      "code_rejected": [h.__dict__ for h in result.rejected],
-                      "npis": result.npis})
+            return record
+        result = await asyncio.to_thread(detect_codes, record.get("text", ""), dicts, threshold)
+        return {**record,
+                "has_codes": result.has_codes,
+                "code_hits": [h.__dict__ for h in result.hits],
+                "code_rejected": [h.__dict__ for h in result.rejected],
+                "npis": result.npis}
+
+    files = await map_files(
+        state.get("files", []), work, stage="detect_codes",
+        concurrency=get_settings().file_concurrency,
+    )
     return {"files": files, "stage": "detect_codes"}
 
 
 async def resolve_npi_node(state: JobState) -> dict:
-    files = []
-    for record in state.get("files", []):
+    async def work(record: dict) -> dict:
         if not record.get("ok") or not record.get("npis"):
-            files.append(record)
-            continue
+            return record
         resolved = await resolve_specialty_from_npis(record["npis"])
         if resolved and resolved.specialty:
-            files.append({**record, "specialty": resolved.specialty,
-                          "confidence": 1.0, "method": "npi"})
-        else:
-            files.append(record)
+            return {**record, "specialty": resolved.specialty,
+                    "confidence": 1.0, "method": "npi"}
+        return record
+
+    files = await map_files(
+        state.get("files", []), work, stage="resolve_npi",
+        concurrency=get_settings().file_concurrency,
+    )
     return {"files": files, "stage": "resolve_npi"}
 
 

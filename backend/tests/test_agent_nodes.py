@@ -1,8 +1,17 @@
+import asyncio
 import zipfile
 
 import pytest
 
-from app.agent.nodes import detect_codes_node, execute_ops_node, intake_node, plan_placement_node, unpack_node
+from app.agent.nodes import (
+    detect_codes_node,
+    execute_ops_node,
+    intake_node,
+    parse_node,
+    plan_placement_node,
+    unpack_node,
+)
+from app.parsing.chain import ParseAttempt, ParseResult
 
 
 @pytest.fixture()
@@ -33,6 +42,32 @@ async def test_unpack_expands_a_zip_and_records_source_path(tmp_path):
     assert "bundle.zip" not in names
     entry = next(f for f in out["files"] if f["filename"] == "a.txt")
     assert entry["source_path"] == "bundle.zip!/cardio/a.txt"
+
+
+async def test_parse_node_keeps_several_files_in_flight(workspace, monkeypatch):
+    inflight = 0
+    peak = 0
+
+    async def fake_parse(path):
+        nonlocal inflight, peak
+        inflight += 1
+        peak = max(peak, inflight)
+        await asyncio.sleep(0.08)
+        inflight -= 1
+        return ParseResult("text", "text", 1, True, [ParseAttempt("text", True, None)])
+
+    monkeypatch.setattr("app.agent.nodes.parse_document", fake_parse)
+    monkeypatch.setattr("app.agent.nodes.get_settings", lambda: type("S", (), {"file_concurrency": 4})())
+
+    files = [
+        {"file_id": "a", "path": str(workspace / "input" / "note.txt"), "ok": False},
+        {"file_id": "b", "path": str(workspace / "input" / "story.txt"), "ok": False},
+        {"file_id": "c", "path": str(workspace / "input" / "note.txt"), "ok": False},
+    ]
+    out = await parse_node({"files": files, "root": str(workspace)})
+    assert [row["file_id"] for row in out["files"]] == ["a", "b", "c"]
+    assert all(row["ok"] for row in out["files"])
+    assert peak >= 3
 
 
 async def test_detect_codes_splits_coded_and_uncoded(workspace):

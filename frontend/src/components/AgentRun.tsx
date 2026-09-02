@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { PIPELINE, buildTape, reasoningFor, stageIndex } from '../agent/pipeline';
-import { AuditEntry, FileDetail, JobDetail, api } from '../api/client';
+import { Approval, AuditEntry, FileDetail, JobDetail, api } from '../api/client';
+import ApprovalCard from './ApprovalCard';
 
 export default function AgentRun({
   jobId,
@@ -13,18 +14,21 @@ export default function AgentRun({
   const [job, setJob] = useState<JobDetail | null>(null);
   const [files, setFiles] = useState<FileDetail[]>([]);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
+  const [approvals, setApprovals] = useState<Approval[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const [nextJob, filePage, auditPage] = await Promise.all([
+      const [nextJob, filePage, auditPage, approvalPage] = await Promise.all([
         api.getJob(jobId),
         api.listFiles(jobId),
         api.listAudit(jobId),
+        api.listApprovals(jobId),
       ]);
       setJob(nextJob);
       setFiles(filePage.items);
       setAudit(auditPage.items);
+      setApprovals(approvalPage.items.filter((row) => row.status === 'pending'));
       setError(null);
     } catch (exc) {
       setError((exc as Error).message);
@@ -33,7 +37,8 @@ export default function AgentRun({
 
   useEffect(() => {
     refresh();
-    return api.subscribe(jobId, () => {
+    return api.subscribe(jobId, (event) => {
+      setJob((prev) => (prev ? { ...prev, ...event } : prev));
       refresh();
     });
   }, [jobId, refresh]);
@@ -41,13 +46,19 @@ export default function AgentRun({
   if (error) return <p className="error">{error}</p>;
   if (!job) return <p className="muted">Connecting to the labelling graph…</p>;
 
-  const current = stageIndex(job.stage);
-  const live = reasoningFor(job.stage, { ...job, files });
-  const tape = buildTape(job, files, audit);
-  const pct = Math.round(job.progress * 100);
+  const stage = job.status === 'completed' ? 'manifest' : job.stage;
+  const current = job.status === 'completed' ? PIPELINE.length : stageIndex(stage);
+  const live = reasoningFor(stage, { ...job, files });
+  const tape = buildTape({ ...job, stage }, files, audit);
+  const pct = job.status === 'completed' ? 100 : Math.round(job.progress * 100);
+  const filesDone = job.files_done ?? files.filter((file) => file.status !== 'pending').length;
+  const filesTotal = job.files_total || job.file_count || files.length;
+  const filePct = filesTotal ? Math.round((filesDone / filesTotal) * 100) : 0;
+
+  const done = job.status === 'completed';
 
   return (
-    <div className="agent-run">
+    <div className={`agent-run${done ? ' agent-run--complete' : ''}`}>
       <header className="agent-run__head">
         <div>
           <p className="eyebrow">Live graph</p>
@@ -63,6 +74,27 @@ export default function AgentRun({
         <strong>{live.headline}</strong>
         <span>{live.detail}</span>
       </p>
+
+      <div className="file-meter">
+        <div className="file-meter__track">
+          <div className="file-meter__bar" style={{ width: `${filePct}%` }} />
+        </div>
+        <p>
+          {filesTotal
+            ? `${filesDone} of ${filesTotal} files processed`
+            : 'Waiting for the archive to unpack…'}
+          {stage ? ` · ${stage.replace(/_/g, ' ')}` : ''}
+        </p>
+      </div>
+
+      {approvals.length > 0 && (
+        <section className="approvals">
+          <h3>Approvals needed ({approvals.length})</h3>
+          {approvals.map((approval) => (
+            <ApprovalCard key={approval.id} jobId={jobId} approval={approval} onDecided={refresh} />
+          ))}
+        </section>
+      )}
 
       <ol className="plan-rail" aria-label="Agent plan">
         {PIPELINE.map((step, index) => {
@@ -90,11 +122,14 @@ export default function AgentRun({
         ))}
       </div>
 
-      {showRecordLink && (
-        <p className="agent-run__footer">
-          <Link to={`/jobs/${jobId}`}>Open the full job record</Link>
-        </p>
-      )}
+      <p className="agent-run__footer">
+        {done && (
+          <a className="download" href={api.downloadUrl(jobId)}>
+            Download output.zip
+          </a>
+        )}
+        {showRecordLink && <Link to={`/jobs/${jobId}`}>Open the full job record</Link>}
+      </p>
     </div>
   );
 }

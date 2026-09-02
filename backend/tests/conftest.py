@@ -13,7 +13,9 @@ os.environ.setdefault("REFERENCE_ROOT", os.path.abspath(os.path.join(os.path.dir
 @pytest.fixture()
 def client():
     from app.main import create_app
+    from app.security import reset_rate_limit
 
+    reset_rate_limit()
     return TestClient(create_app(), raise_server_exceptions=False)
 
 

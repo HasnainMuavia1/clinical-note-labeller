@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import io
 import json
-import uuid
 import zipfile
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
@@ -14,7 +14,7 @@ from ...db.models import ApprovalStatus, JobStatus
 from ...db.repository import get_repository
 from ...errors import ProblemException
 from ...security import require_api_key
-from ...storage import job_root, save_uploads
+from ...storage import allocate_job_id, job_root, save_uploads
 from ...tasks import dispatch_job
 from .schemas import AuditEntryOut, FileDetail, JobDetail, JobSummary, Page
 
@@ -28,9 +28,54 @@ def _job_or_404(job_id: str):
     return job
 
 
+_STATUS_RANK = {"filed": 4, "parsed": 3, "unparsed": 2, "pending": 1, "": 0}
+
+
+def _file_key(row) -> str:
+    return row.source_path or row.filename or row.file_id
+
+
+def _is_archive_shell(row) -> bool:
+    name = (row.filename or "").lower()
+    source = row.source_path or name
+    return name.endswith(".zip") and "!" not in source
+
+
+def _best_files(rows) -> list:
+    groups: dict[str, list] = {}
+    for row in rows:
+        if _is_archive_shell(row):
+            continue
+        groups.setdefault(_file_key(row), []).append(row)
+    chosen = []
+    for group in groups.values():
+        chosen.append(max(group, key=lambda row: (
+            _STATUS_RANK.get(row.status, 0),
+            bool(row.specialty),
+            row.confidence or 0,
+        )))
+    return chosen
+
+
+def _file_counts(job) -> tuple[int, int]:
+    files = _best_files(job.files or [])
+    if not files:
+        names = [name for name in (job.original_filenames or []) if not str(name).lower().endswith(".zip")]
+        return 0, len(names) or len(job.original_filenames or [])
+    done = sum(1 for row in files if row.status not in {"pending", ""})
+    return done, len(files)
+
+
 def _summary(job) -> JobSummary:
-    return JobSummary(id=job.id, status=job.status, stage=job.stage, progress=job.progress,
-                      created_at=job.created_at, file_count=len(job.files))
+    done, total = _file_counts(job)
+    stage, progress = job.stage, job.progress
+    if job.status == JobStatus.COMPLETED:
+        stage, progress = "manifest", 1.0
+    return JobSummary(
+        id=job.id, status=job.status, stage=stage, progress=progress,
+        created_at=job.created_at, file_count=total or len(job.original_filenames or []),
+        files_done=done, files_total=total,
+    )
 
 
 def _file_detail(row) -> FileDetail:
@@ -56,7 +101,11 @@ def create_job(files: list[UploadFile], api_key: str = Depends(require_api_key),
     if not files:
         raise ProblemException(422, "Unprocessable Entity", "At least one file is required.")
 
-    job_id = str(uuid.uuid4())
+    pending_names = [Path(upload.filename or "upload").name for upload in files]
+    job_id = allocate_job_id(
+        pending_names,
+        is_taken=lambda name: repo.get_job(name) is not None or job_root(name).exists(),
+    )
     names = save_uploads(job_id, files)
     job = repo.create_job(job_id, api_key, names, idempotency_key)
     repo.audit(job_id, "job_created", {"files": names})
@@ -83,7 +132,7 @@ def get_job(job_id: str) -> JobDetail:
 @router.get("/jobs/{job_id}/files", response_model=Page)
 def list_job_files(job_id: str) -> Page:
     _job_or_404(job_id)
-    rows = get_repository().list_files(job_id)
+    rows = _best_files(get_repository().list_files(job_id))
     return Page(items=[_file_detail(r).model_dump() for r in rows], next_cursor=None)
 
 
@@ -163,10 +212,13 @@ async def job_events(job_id: str) -> EventSourceResponse:
             job = get_repository().get_job(job_id)
             if job is None:
                 break
+            done, total = _file_counts(job)
+            summary = _summary(job)
             snapshot = {
-                "status": job.status, "stage": job.stage, "progress": job.progress,
+                "status": summary.status, "stage": summary.stage, "progress": summary.progress,
                 "pending_approvals": len(
                     [a for a in job.approvals if a.status == ApprovalStatus.PENDING]),
+                "files_done": done, "files_total": total,
             }
             if snapshot != last:
                 last = snapshot

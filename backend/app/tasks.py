@@ -26,6 +26,34 @@ STAGE_PROGRESS = {
     "manifest": 1.0,
 }
 
+STAGE_ORDER = list(STAGE_PROGRESS)
+
+
+def _band(stage: str) -> tuple[float, float]:
+    if stage not in STAGE_PROGRESS:
+        return 0.0, STAGE_PROGRESS.get(stage, 0.0)
+    index = STAGE_ORDER.index(stage)
+    start = STAGE_PROGRESS[STAGE_ORDER[index - 1]] if index else 0.0
+    return start, STAGE_PROGRESS[stage]
+
+
+def _file_tick(job_id: str, stage: str, done: int, total: int, record: dict) -> None:
+    """Persist one file so the UI can show N of M while a long node is still running."""
+    repo = get_repository()
+    job = repo.get_job(job_id)
+    if job and job.status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}:
+        return
+    start, end = _band(stage)
+    frac = done / total if total else 1.0
+    repo.update_job(job_id, stage=stage, progress=start + (end - start) * frac)
+    _persist(job_id, {"stage": stage, "files": [record]})
+    if done == 1 or done == total or done % 10 == 0:
+        repo.audit(job_id, "file_progress", {
+            "stage": stage, "done": done, "total": total,
+            "filename": record.get("filename"),
+        })
+
+
 celery_app = Celery("labeller", broker=_settings.redis_url, backend=_settings.redis_url)
 celery_app.conf.update(task_acks_late=True, worker_prefetch_multiplier=1, task_track_started=True)
 
@@ -111,6 +139,26 @@ def _handle_interrupt(job_id: str, state: dict) -> bool:
     return True
 
 
+def _listen(job_id: str):
+    from .agent.graph import step_listener
+    from .agent.progress import file_progress_listener
+
+    step_token = step_listener.set(
+        lambda node, result, prior: _checkpoint(job_id, node, result, prior))
+    file_token = file_progress_listener.set(
+        lambda stage, done, total, record: _file_tick(job_id, stage, done, total, record))
+    return step_token, file_token
+
+
+def _unlisten(tokens) -> None:
+    from .agent.graph import step_listener
+    from .agent.progress import file_progress_listener
+
+    step_token, file_token = tokens
+    file_progress_listener.reset(file_token)
+    step_listener.reset(step_token)
+
+
 @celery_app.task(name="jobs.run")
 def run_job_task(job_id: str) -> None:
     from .agent.graph import run_job
@@ -118,15 +166,12 @@ def run_job_task(job_id: str) -> None:
     repo = get_repository()
     repo.update_job(job_id, status=JobStatus.RUNNING, stage="intake")
     try:
-        from .agent.graph import step_listener
-
-        token = step_listener.set(
-            lambda node, result, prior: _checkpoint(job_id, node, result, prior))
+        tokens = _listen(job_id)
         try:
             state = asyncio.run(_with_checkpointer(
                 lambda saver: run_job(job_id, job_root(job_id), saver)))
         finally:
-            step_listener.reset(token)
+            _unlisten(tokens)
         _persist(job_id, state)
         if not _handle_interrupt(job_id, state):
             repo.update_job(job_id, status=JobStatus.COMPLETED, stage="manifest", progress=1.0)
@@ -142,15 +187,12 @@ def resume_job_task(job_id: str, resume_value) -> None:
     repo = get_repository()
     repo.update_job(job_id, status=JobStatus.RUNNING)
     try:
-        from .agent.graph import step_listener
-
-        token = step_listener.set(
-            lambda node, result, prior: _checkpoint(job_id, node, result, prior))
+        tokens = _listen(job_id)
         try:
             state = asyncio.run(_with_checkpointer(
                 lambda saver: resume_job(job_id, resume_value, saver)))
         finally:
-            step_listener.reset(token)
+            _unlisten(tokens)
         _persist(job_id, state)
         if not _handle_interrupt(job_id, state):
             repo.update_job(job_id, status=JobStatus.COMPLETED, stage="manifest", progress=1.0)

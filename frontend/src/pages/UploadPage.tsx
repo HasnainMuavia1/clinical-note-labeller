@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../api/client';
 import { PIPELINE } from '../agent/pipeline';
 import AgentRun from '../components/AgentRun';
+import { pickActiveJob, recalledJobId, rememberJobId } from '../jobs/active';
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -15,6 +16,24 @@ export default function UploadPage() {
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(true);
+
+  useEffect(() => {
+    const stored = recalledJobId();
+    api
+      .listJobs()
+      .then((page) => {
+        const id = pickActiveJob(page.items, stored);
+        if (id) {
+          rememberJobId(id);
+          setJobId(id);
+        }
+      })
+      .catch(() => {
+        if (stored) setJobId(stored);
+      })
+      .finally(() => setRestoring(false));
+  }, []);
 
   function takeFiles(list: FileList | File[]) {
     setFiles(Array.from(list));
@@ -26,6 +45,7 @@ export default function UploadPage() {
     setError(null);
     try {
       const job = await api.createJob(files);
+      rememberJobId(job.id);
       setJobId(job.id);
     } catch (exc) {
       setError((exc as Error).message);
@@ -106,7 +126,9 @@ export default function UploadPage() {
       </section>
 
       <aside className="console">
-        {jobId ? (
+        {restoring ? (
+          <p className="muted">Looking up the latest run…</p>
+        ) : jobId ? (
           <AgentRun jobId={jobId} />
         ) : (
           <>

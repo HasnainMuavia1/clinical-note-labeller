@@ -3,7 +3,7 @@ import pytest
 import respx
 
 from app.config import get_settings
-from app.parsing.llamaparse import BASE_URL, LlamaParseError, llamaparse_text
+from app.parsing.llamaparse import BASE_URL, LlamaParseError, llamaparse_text, reset_upload_limiter
 
 
 @pytest.fixture()
@@ -16,8 +16,10 @@ def note(tmp_path):
 @pytest.fixture(autouse=True)
 def _key(monkeypatch):
     get_settings.cache_clear()
+    reset_upload_limiter()
     monkeypatch.setenv("LLAMA_CLOUD_API_KEY", "test-llama-key")
     yield
+    reset_upload_limiter()
     get_settings.cache_clear()
 
 
@@ -34,6 +36,30 @@ async def test_uploads_polls_and_returns_text(note):
     assert await llamaparse_text(note) == "Dx: E11.9"
     assert upload.called
     assert upload.calls[0].request.headers["authorization"] == "Bearer test-llama-key"
+
+
+@respx.mock
+async def test_retries_429_with_backoff_then_succeeds(note, monkeypatch):
+    slept = []
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
+
+    monkeypatch.setattr("app.parsing.llamaparse.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("app.parsing.llamaparse.random.random", lambda: 0.5)
+    respx.post(f"{BASE_URL}/upload").mock(
+        side_effect=[
+            httpx.Response(429, json={"detail": "Rate limit exceeded"}),
+            httpx.Response(200, json={"id": "job-429"}),
+        ]
+    )
+    respx.get(f"{BASE_URL}/job/job-429").mock(
+        return_value=httpx.Response(200, json={"status": "SUCCESS"}))
+    respx.get(f"{BASE_URL}/job/job-429/result/text").mock(
+        return_value=httpx.Response(200, json={"text": "ok"}))
+
+    assert await llamaparse_text(note) == "ok"
+    assert slept and slept[0] > 0
 
 
 @respx.mock

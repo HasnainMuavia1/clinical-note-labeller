@@ -36,7 +36,9 @@ export default function JobsPage() {
               </td>
               <td>{job.status}</td>
               <td>{job.stage}</td>
-              <td>{job.file_count}</td>
+              <td>
+                {job.files_done ?? 0}/{job.files_total || job.file_count}
+              </td>
               <td>{new Date(job.created_at).toLocaleString()}</td>
             </tr>
           ))}

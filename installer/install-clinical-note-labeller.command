@@ -16,7 +16,9 @@ APP_API_KEY="@@APP_API_KEY@@"
 
 INSTALL_DIR="$HOME/Library/Application Support/ClinicalNoteLabeller"
 [ "$(uname -s)" = "Linux" ] && INSTALL_DIR="$HOME/.local/share/ClinicalNoteLabeller"
-DATA_DIR="$HOME/ClinicalNoteLabeller"
+# Results live next to the .command the client double-clicked.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DATA_DIR="$SCRIPT_DIR/ClinicalNoteLabeller"
 
 bold=$(printf '\033[1m'); dim=$(printf '\033[2m'); red=$(printf '\033[31m'); off=$(printf '\033[0m')
 say()  { printf '%s\n' "$*"; }

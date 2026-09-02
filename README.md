@@ -57,28 +57,22 @@ alone if you need a backend fix without dropping the worker.
 
 ## Where files are saved
 
-Each job gets its own folder under `WORKSPACE_ROOT` (Docker volume
-`clinical-note-labeller_workspace`):
+Jobs write to a `workspace/` folder **on the host**, bind-mounted into the
+containers as `/data/workspace`.
+
+- Local `make up`: `workspace/` next to `docker-compose.yml` (this repo)
+- Client installer: `ClinicalNoteLabeller/workspace/` next to the `.bat` / `.exe` / `.command`
 
 ```
-<workspace>/<job_id>/
-  input/                 original upload, immutable
-  extracted/             unpacked ZIP contents
-  output/                labelled copies (the result)
+workspace/<upload-name>/          # ECW_zip.zip → workspace/ECW_zip/
+  input/                          original upload, immutable
+  extracted/                      unpacked ZIP contents
+  output/                         labelled copies (the result)
   logs/audit.jsonl
 ```
 
-Inside the containers that path is `/data/workspace/<job_id>/`.
-
-Copy a finished job onto your Desktop:
-
-```bash
-docker compose cp api:/data/workspace/<job_id>/output ~/Desktop/labelled-notes
-```
-
-On Docker Desktop for Mac the volume lives inside the Linux VM, so Finder will
-not show `/var/lib/docker/volumes/...` directly. Use `docker compose cp` or
-`docker compose exec api ls /data/workspace`.
+Open `workspace/<job_id>/output/` in Finder when a job finishes. Download in the
+UI is only a convenience zip of that same tree.
 
 ## How a job runs
 
@@ -195,8 +189,8 @@ python3 tools/make_installer.py
 
 | Client | File | Output appears in |
 |---|---|---|
-| Windows | `dist/Clinical-Note-Labeller-Setup.exe` | `%USERPROFILE%\ClinicalNoteLabeller\workspace` |
-| macOS / Linux | `dist/Clinical-Note-Labeller-Setup.command` | `~/ClinicalNoteLabeller/workspace` |
+| Windows | `dist/Clinical-Note-Labeller-Setup.exe` | `ClinicalNoteLabeller\workspace` next to the exe |
+| macOS / Linux | `dist/Clinical-Note-Labeller-Setup.command` | `ClinicalNoteLabeller/workspace` next to the script |
 
 The installer installs Docker if needed, pulls published images, starts the
 stack, and opens the browser. Images are amd64 + arm64.

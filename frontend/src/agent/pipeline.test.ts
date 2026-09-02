@@ -60,6 +60,21 @@ describe('reasoningFor', () => {
     expect(text.detail).toMatch(/rejected/i);
   });
 
+  it('shows how many notes have been parsed', () => {
+    const text = reasoningFor('parse', {
+      status: 'running',
+      files_done: 47,
+      files_total: 996,
+      files: [],
+    });
+    expect(text.headline).toContain('47 of 996');
+  });
+
+  it('treats a completed run as the manifest seal even if stage is stale', () => {
+    const text = reasoningFor('parse', { status: 'completed', files_done: 996, files_total: 996 });
+    expect(text.headline).toMatch(/manifest|complete/i);
+  });
+
   it('says when the run is waiting on a human', () => {
     const text = reasoningFor('approval_gate', {
       status: 'awaiting_approval',
@@ -83,6 +98,18 @@ describe('buildTape', () => {
     expect(tape[0].kind).toBe('plan');
     expect(tape.some((entry) => entry.stage === 'intake')).toBe(true);
     expect(tape.at(-1)?.stage).toBe('parse');
+  });
+
+  it('keeps recent file_progress ticks on the tape', () => {
+    const tape = buildTape(
+      { stage: 'parse', status: 'running', files_done: 20, files_total: 100 },
+      [],
+      [
+        { action: 'file_progress', detail: { stage: 'parse', done: 10, total: 100, filename: 'a.pdf' }, created_at: '2026-09-02T10:00:03Z' },
+        { action: 'file_progress', detail: { stage: 'parse', done: 20, total: 100, filename: 'b.pdf' }, created_at: '2026-09-02T10:00:04Z' },
+      ],
+    );
+    expect(tape.some((entry) => entry.headline.includes('20 of 100'))).toBe(true);
   });
 });
 

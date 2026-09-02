@@ -84,6 +84,21 @@ def test_checkpoint_updates_stage_progress_files_and_audit(repo):
     assert steps[-1].detail["node"] == "parse_node"
 
 
+def test_file_tick_moves_progress_inside_a_stage(repo):
+    tasks_module._file_tick(
+        "j1", "parse", 50, 100,
+        {"file_id": "f50", "filename": "note-50.pdf", "ok": True, "parser": "llamaparse",
+         "parse_trail": [{"parser": "llamaparse", "ok": True}]},
+    )
+    job = repo.get_job("j1")
+    assert job.stage == "parse"
+    assert job.progress == pytest.approx(0.24)  # halfway between unpack 0.16 and parse 0.32
+    assert repo.list_files("j1")[0].status == "parsed"
+    ticks = [e for e in job.audit_entries if e.action == "file_progress"]
+    assert ticks[-1].detail["done"] == 50
+    assert ticks[-1].detail["total"] == 100
+
+
 def test_a_batch_interrupt_parks_the_job_and_schedules_a_poll(repo, monkeypatch):
     scheduled = []
     monkeypatch.setattr(tasks_module.poll_batch_task, "apply_async",

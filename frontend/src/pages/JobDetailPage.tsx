@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Approval, FileDetail, JobDetail, api } from '../api/client';
+import { FileDetail, JobDetail, api } from '../api/client';
 import AgentRun from '../components/AgentRun';
-import ApprovalCard from '../components/ApprovalCard';
 import CodeEvidence from '../components/CodeEvidence';
 import FileTree from '../components/FileTree';
 
@@ -10,7 +9,6 @@ export default function JobDetailPage() {
   const { jobId = '' } = useParams();
   const [job, setJob] = useState<JobDetail | null>(null);
   const [files, setFiles] = useState<FileDetail[]>([]);
-  const [approvals, setApprovals] = useState<Approval[]>([]);
   const [tree, setTree] = useState<string[]>([]);
   const [selected, setSelected] = useState<FileDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -19,7 +17,6 @@ export default function JobDetailPage() {
     try {
       setJob(await api.getJob(jobId));
       setFiles((await api.listFiles(jobId)).items);
-      setApprovals((await api.listApprovals(jobId)).items.filter((a) => a.status === 'pending'));
       setTree((await api.getTree(jobId)).paths);
     } catch (exc) {
       setError((exc as Error).message);
@@ -40,15 +37,6 @@ export default function JobDetailPage() {
     <section className="job-record">
       <AgentRun jobId={jobId} showRecordLink={false} />
       {job.error && <p className="error">{job.error}</p>}
-
-      {approvals.length > 0 && (
-        <section className="approvals">
-          <h3>Approvals needed ({approvals.length})</h3>
-          {approvals.map((approval) => (
-            <ApprovalCard key={approval.id} jobId={jobId} approval={approval} onDecided={refresh} />
-          ))}
-        </section>
-      )}
 
       <table>
         <thead>
