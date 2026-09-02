@@ -1,0 +1,11 @@
+Chapter Code_Range Description
+1 00000-01999 Anesthesia - Covers anesthesia services for surgical obstetric or other medical procedures including the administration of anesthesia and associated monitoring
+2 10000-19999 Integumentary System - Includes procedures such as excisions repairs grafts and biopsies of the skin subcutaneous tissue and breast
+3 20000-29999 Musculoskeletal System - Includes procedures on bones joints muscles tendons ligaments and fascia such as fracture repair joint replacement and musculoskeletal reconstruction
+4 30000-39999 Respiratory Cardiovascular Hemic and Lymphatic Systems - Covers procedures involving the respiratory tract heart blood vessels and lymphatic system including thoracic surgery cardiac procedures and vascular interventions
+5 40000-49999 Digestive System - Includes surgical and diagnostic procedures on the esophagus stomach intestines liver pancreas gallbladder and related structures
+6 50000-59999 Urinary and Male Female Genital Systems - Covers procedures on the kidneys ureters bladder reproductive organs and associated structures
+7 60000-69999 Nervous System - Includes surgeries and procedures involving the brain spinal cord spinal nerves peripheral nerves and related structures
+8 70000-79999 Radiology - Includes diagnostic imaging fluoroscopy ultrasound MRI CT scans and related imaging procedures
+9 80000-89999 Pathology and Laboratory - Covers tests and analyses on tissues cells blood and bodily fluids including laboratory panels and pathology examinations
+10 90000-99999 Medicine Services - Includes evaluation and management visits psychiatric services immunizations infusion therapy and other non-surgical medical procedures

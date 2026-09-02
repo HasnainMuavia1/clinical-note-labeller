@@ -1,0 +1,117 @@
+name: clinical-note-labeller
+
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql+psycopg://labeller:labeller@postgres:5432/labeller
+  REDIS_URL: redis://redis:6379/0
+  WORKSPACE_ROOT: /data/workspace
+  REFERENCE_ROOT: /data/reference
+  SANDBOX_URL: http://parser-sandbox:8081
+  S3_ENDPOINT: http://minio:9000
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+  S3_BUCKET: uploads
+  API_KEYS: ${API_KEYS:-dev-key}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  OPENAI_MINI_MODEL_ID: ${OPENAI_MINI_MODEL_ID:-gpt-5.4-mini}
+  LLAMA_CLOUD_API_KEY: ${LLAMA_CLOUD_API_KEY:-}
+  CODE_EVIDENCE_THRESHOLD: ${CODE_EVIDENCE_THRESHOLD:-1.0}
+  SPECIALTY_CONFIDENCE_THRESHOLD: ${SPECIALTY_CONFIDENCE_THRESHOLD:-0.65}
+  LLM_BATCH_MIN_FILES: ${LLM_BATCH_MIN_FILES:-10}
+
+x-reference-mounts: &reference-mounts
+  - workspace:/data/workspace
+  - ./cpt-codes:/data/reference/cpt-codes:ro
+  - ./ict-10-codes:/data/reference/ict-10-codes:ro
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: labeller
+      POSTGRES_PASSWORD: labeller
+      POSTGRES_DB: labeller
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U labeller"]
+      interval: 5s
+      retries: 12
+    networks: [appnet]
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 12
+    networks: [appnet]
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+    volumes: ["miniodata:/data"]
+    # 9001 is commonly taken by another local MinIO; expose the console on 9101.
+    ports: ["9101:9001"]
+    networks: [appnet]
+
+  # Parses untrusted documents. On an internal network only: no route to the
+  # internet, no API keys, read-only root filesystem, dropped capabilities.
+  parser-sandbox:
+    build: ./sandbox
+    networks: [sandboxnet]
+    read_only: true
+    tmpfs: ["/tmp:size=2g"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    pids_limit: 256
+    mem_limit: 2g
+    cpus: 2.0
+
+  api:
+    build: ./backend
+    environment: *backend-env
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    volumes: *reference-mounts
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    ports: ["8000:8000"]
+    networks: [appnet]
+
+  worker:
+    build: ./backend
+    environment: *backend-env
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    volumes: *reference-mounts
+    command: celery -A app.tasks.celery_app worker --loglevel=INFO --concurrency=4
+    # The image healthcheck curls the HTTP API; the worker serves no HTTP.
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.tasks.celery_app inspect ping -d celery@$$HOSTNAME"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    # On both networks: reaches the sandbox and the internet (OpenAI, LlamaParse, NPI).
+    networks: [appnet, sandboxnet]
+
+  frontend:
+    build: ./frontend
+    depends_on: [api]
+    ports: ["5173:80"]
+    networks: [appnet]
+
+volumes:
+  pgdata:
+  miniodata:
+  workspace:
+
+networks:
+  appnet:
+  sandboxnet:
+    internal: true

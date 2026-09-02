@@ -1,0 +1,40 @@
+# secrets — never commit live keys
+.env
+.env.*
+!.env.example
+
+# python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.migration_check.db
+
+# node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# runtime / local data
+data/
+workspace/
+logs/
+*.log
+
+# os / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# docker
+docker-compose.override.yml
