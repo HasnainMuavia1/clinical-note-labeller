@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import io
+import os
 import shutil
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from charset_normalizer import from_bytes
@@ -38,6 +40,19 @@ def _parse_text(data: bytes) -> tuple[str, int]:
     return (str(best) if best else data.decode("utf-8", errors="replace")), 1
 
 
+def _ocr_workers() -> int:
+    raw = os.environ.get("OCR_WORKERS", "").strip()
+    if raw.isdigit() and int(raw) > 0:
+        return int(raw)
+    return max(1, os.cpu_count() or 1)
+
+
+def _ocr_page(image: Path) -> str:
+    proc = subprocess.run(["tesseract", str(image), "stdout"],
+                          check=True, timeout=600, capture_output=True)
+    return proc.stdout.decode("utf-8", errors="replace")
+
+
 def _parse_ocr(data: bytes, suffix: str) -> tuple[str, int]:
     if not shutil.which("tesseract"):
         raise RuntimeError("tesseract is not installed in this image")
@@ -52,11 +67,12 @@ def _parse_ocr(data: bytes, suffix: str) -> tuple[str, int]:
             images = sorted(Path(tmp).glob("page*.png"))
         else:
             images = [src]
-        chunks = []
-        for image in images:
-            proc = subprocess.run(["tesseract", str(image), "stdout"],
-                                  check=True, timeout=600, capture_output=True)
-            chunks.append(proc.stdout.decode("utf-8", errors="replace"))
+        workers = min(len(images), _ocr_workers()) if images else 1
+        if workers <= 1:
+            chunks = [_ocr_page(image) for image in images]
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                chunks = list(pool.map(_ocr_page, images))
         return "\n".join(chunks), len(images)
 
 

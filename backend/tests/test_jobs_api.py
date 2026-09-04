@@ -73,6 +73,21 @@ def test_reuploading_the_same_name_gets_a_numeric_suffix(api, tmp_path):
     assert dispatched == ["ECW_zip", "ECW_zip__2"]
 
 
+def test_upload_skips_a_bad_filename_and_keeps_the_rest(api, tmp_path):
+    client, repo, dispatched = api
+    files = [
+        ("files", ("note.txt", io.BytesIO(b"hello"), "text/plain")),
+        ("files", ("../escaped.txt", io.BytesIO(b"bad"), "text/plain")),
+    ]
+    r = client.post("/api/v1/jobs", files=files, headers=AUTH)
+    assert r.status_code == 202
+    job_id = r.json()["id"]
+    assert dispatched == [job_id]
+    assert (tmp_path / job_id / "input" / "note.txt").read_bytes() == b"hello"
+    assert not (tmp_path / "escaped.txt").exists()
+    assert repo.get_job(job_id) is not None
+
+
 def test_uploaded_bytes_land_in_the_job_input_folder(api, tmp_path):
     client, _, _ = api
     files = [("files", ("note.txt", io.BytesIO(b"hello"), "text/plain"))]

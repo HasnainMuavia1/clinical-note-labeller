@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -91,6 +92,14 @@ def _unconfigured(requests: list[ClassificationRequest], method: str) -> list[Cl
                            "OPENAI_API_KEY is not configured", method) for r in requests]
 
 
+def resolve_llm_sync_concurrency() -> int:
+    try:
+        from ..runtime.capacity import resolve_capacity
+        return max(1, resolve_capacity().llm_sync_concurrency)
+    except Exception:
+        return 8
+
+
 async def classify_sync(requests: list[ClassificationRequest]) -> list[Classification]:
     settings = get_settings()
     if not settings.openai_api_key:
@@ -102,23 +111,27 @@ async def classify_sync(requests: list[ClassificationRequest]) -> list[Classific
 
     client = _async_client()
     model = settings.openai_mini_model_id
-    results: list[Classification] = []
-    for request in requests:
-        try:
-            completion = await client.chat.completions.create(
-                model=model,
-                messages=build_prompt(request.text),
-                response_format={"type": "json_schema", "json_schema": SPECIALTY_SCHEMA},
-            )
-            results.append(
-                _parse_payload(request.file_id, completion.choices[0].message.content, "llm_sync")
-            )
-        except Exception as exc:  # noqa: BLE001
-            log.warning("sync classification failed for %s: %s", request.file_id, exc)
-            results.append(
-                Classification(request.file_id, "Unclassified", 0.0, f"error: {exc}", "llm_sync")
-            )
-    return results
+    limit = max(1, resolve_llm_sync_concurrency())
+    semaphore = asyncio.Semaphore(limit)
+    results: list[Classification | None] = [None] * len(requests)
+
+    async def one(index: int, request: ClassificationRequest) -> None:
+        async with semaphore:
+            try:
+                completion = await client.chat.completions.create(
+                    model=model,
+                    messages=build_prompt(request.text),
+                    response_format={"type": "json_schema", "json_schema": SPECIALTY_SCHEMA},
+                )
+                results[index] = _parse_payload(
+                    request.file_id, completion.choices[0].message.content, "llm_sync")
+            except Exception as exc:  # noqa: BLE001
+                log.warning("sync classification failed for %s: %s", request.file_id, exc)
+                results[index] = Classification(
+                    request.file_id, "Unclassified", 0.0, f"error: {exc}", "llm_sync")
+
+    await asyncio.gather(*(one(index, request) for index, request in enumerate(requests)))
+    return [row for row in results if row is not None]
 
 
 def submit_batch(requests: list[ClassificationRequest], workdir: Path) -> str:
@@ -158,19 +171,28 @@ def fetch_batch_results(batch_id: str) -> list[Classification]:
         return []
     raw = client.files.content(batch.output_file_id).read()
     results: list[Classification] = []
-    for line in raw.decode("utf-8").splitlines():
+    try:
+        text = raw.decode("utf-8", errors="replace")
+    except Exception:
+        text = ""
+    for line in text.splitlines():
         if not line.strip():
             continue
-        record = json.loads(line)
-        custom_id = record.get("custom_id", "")
-        response = record.get("response") or {}
-        if response.get("status_code") != 200:
-            results.append(
-                Classification(custom_id, "Unclassified", 0.0, "batch request failed", "llm_batch")
-            )
+        try:
+            record = json.loads(line)
+            custom_id = record.get("custom_id", "")
+            response = record.get("response") or {}
+            if response.get("status_code") != 200:
+                results.append(
+                    Classification(custom_id, "Unclassified", 0.0,
+                                   "batch request failed", "llm_batch")
+                )
+                continue
+            content = response["body"]["choices"][0]["message"]["content"]
+            results.append(_parse_payload(custom_id, content, "llm_batch"))
+        except Exception as exc:
+            log.warning("skipping batch result line: %s", exc)
             continue
-        content = response["body"]["choices"][0]["message"]["content"]
-        results.append(_parse_payload(custom_id, content, "llm_batch"))
     return results
 
 

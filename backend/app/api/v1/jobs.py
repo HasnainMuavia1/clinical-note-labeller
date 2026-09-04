@@ -28,7 +28,7 @@ def _job_or_404(job_id: str):
     return job
 
 
-_STATUS_RANK = {"filed": 4, "parsed": 3, "unparsed": 2, "pending": 1, "": 0}
+_STATUS_RANK = {"filed": 4, "parsed": 3, "unparsed": 2, "skipped": 2, "pending": 1, "": 0}
 
 
 def _file_key(row) -> str:
@@ -78,13 +78,22 @@ def _summary(job) -> JobSummary:
     )
 
 
+def _skip_reason(row) -> str | None:
+    trail = row.parse_trail or []
+    for attempt in reversed(trail):
+        if attempt.get("skipped") or (not attempt.get("ok") and attempt.get("reason")):
+            return attempt.get("reason")
+    return None
+
+
 def _file_detail(row) -> FileDetail:
     return FileDetail(
         file_id=row.file_id, filename=row.filename, source_path=row.source_path,
         status=row.status, parser=row.parser, parse_trail=row.parse_trail or [],
         has_codes=row.has_codes, code_hits=row.code_hits or [],
         code_rejected=row.code_rejected or [], npis=row.npis or [], specialty=row.specialty,
-        confidence=row.confidence, method=row.method, output_path=row.output_path)
+        confidence=row.confidence, method=row.method, output_path=row.output_path,
+        skip_reason=_skip_reason(row))
 
 
 @router.post("/jobs", status_code=202, response_model=JobDetail)
@@ -176,7 +185,7 @@ def job_tree(job_id: str) -> dict:
 
 
 @router.get("/jobs/{job_id}/download")
-def download_results(job_id: str) -> FileResponse | StreamingResponse:
+def download_results(job_id: str):
     _job_or_404(job_id)
     root = job_root(job_id)
     ready = root.parent / f"{root.name}-output.zip"

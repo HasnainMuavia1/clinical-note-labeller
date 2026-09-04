@@ -6,7 +6,8 @@ import zipfile
 from pathlib import Path
 
 CSV_COLUMNS = ["file_id", "filename", "source_path", "codes_branch", "specialty",
-               "confidence", "method", "parser", "output_path", "code_count"]
+               "confidence", "method", "parser", "output_path", "code_count",
+               "skip_reason"]
 
 
 def write_manifest(path: Path, records: list[dict]) -> None:
@@ -35,7 +36,11 @@ def write_output_zip(output_dir: Path, zip_path: Path) -> Path | None:
     tmp = zip_path.with_suffix(zip_path.suffix + ".part")
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
         for path in sorted(output_dir.rglob("*")):
-            if path.is_file() and path.suffix != ".part":
+            if not path.is_file() or path.suffix == ".part":
+                continue
+            try:
                 zf.write(path, path.relative_to(output_dir).as_posix())
+            except Exception:
+                continue
     tmp.replace(zip_path)
     return zip_path

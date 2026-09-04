@@ -25,6 +25,23 @@ def workspace(tmp_path):
     return root
 
 
+async def test_parse_node_skips_a_broken_file_and_continues(workspace, monkeypatch):
+    async def fake_parse(path):
+        if path.name == "story.txt":
+            raise OSError("unreadable")
+        return ParseResult("ok", "text", 1, True, [ParseAttempt("text", True, None)])
+
+    monkeypatch.setattr("app.agent.nodes.parse_document", fake_parse)
+    state = await intake_node({"job_id": "job-1", "root": str(workspace)})
+    out = await parse_node({**state, "job_id": "job-1", "root": str(workspace)})
+    by_name = {f["filename"]: f for f in out["files"]}
+    assert by_name["note.txt"]["ok"] is True
+    assert by_name["story.txt"]["ok"] is False
+    assert by_name["story.txt"]["skipped"] is True
+    assert "story.txt" in by_name["story.txt"]["skip_reason"]
+    assert "unreadable" in by_name["story.txt"]["skip_reason"]
+
+
 async def test_intake_enumerates_input_files(workspace):
     out = await intake_node({"job_id": "job-1", "root": str(workspace)})
     assert len(out["files"]) == 2
@@ -113,6 +130,50 @@ async def test_execute_ops_writes_the_files(workspace):
                                   "files": [{"file_id": "f1"}]})
     assert (workspace / "output" / "with-codes" / "Cardiology" / "note.txt").exists()
     assert out["files"][0]["output_path"] == "output/with-codes/Cardiology/note.txt"
+
+
+async def test_unpack_skips_one_bad_zip_entry_and_keeps_the_rest(tmp_path):
+    root = tmp_path / "job-mix"
+    (root / "input").mkdir(parents=True)
+    with zipfile.ZipFile(root / "input" / "bundle.zip", "w") as zf:
+        zf.writestr("keep.txt", "Dx: I10")
+        zf.writestr("../escaped.txt", "bad")
+    state = await intake_node({"job_id": "job-mix", "root": str(root)})
+    out = await unpack_node({**state, "job_id": "job-mix", "root": str(root)})
+    by_name = {f["filename"]: f for f in out["files"]}
+    assert by_name["keep.txt"]["ok"] is not False or not by_name["keep.txt"].get("skipped")
+    assert "keep.txt" in by_name
+    skipped = [f for f in out["files"] if f.get("skipped")]
+    assert skipped
+    assert any("escaped" in (f["filename"] + f.get("skip_reason", "")) for f in skipped)
+
+
+async def test_plan_placement_skips_one_bad_file_and_plans_the_rest(workspace, monkeypatch):
+    from app.workspace.filetools import GuardedFileTools
+
+    real = GuardedFileTools.plan_copy
+
+    def flaky(self, source, target_rel, reason):
+        if target_rel.endswith("a.txt"):
+            raise OSError("name too long")
+        return real(self, source, target_rel, reason)
+
+    monkeypatch.setattr(GuardedFileTools, "plan_copy", flaky)
+    files = [
+        {"file_id": "f1", "filename": "a.txt", "path": str(workspace / "input" / "note.txt"),
+         "has_codes": True, "specialty": "Cardiology", "confidence": 0.9, "ok": True,
+         "method": "llm_sync"},
+        {"file_id": "f2", "filename": "b.txt", "path": str(workspace / "input" / "story.txt"),
+         "has_codes": False, "specialty": "Cardiology", "confidence": 0.9, "ok": True,
+         "method": "llm_sync"},
+    ]
+    out = await plan_placement_node({"files": files, "root": str(workspace), "job_id": "job-1"})
+    targets = [op["target"] for op in out["pending_ops"]]
+    assert any(t.endswith("b.txt") for t in targets)
+    skipped = [f for f in out["files"] if f.get("skipped")]
+    assert len(skipped) == 1
+    assert "a.txt" in skipped[0]["skip_reason"]
+    assert "name too long" in skipped[0]["skip_reason"]
 
 
 async def test_manifest_writes_a_sibling_output_zip(workspace):

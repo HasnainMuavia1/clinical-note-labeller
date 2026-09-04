@@ -42,6 +42,43 @@ def test_persist_writes_a_row_per_file(repo):
     assert rows[0].code_hits[0]["code"] == "99213"
 
 
+def test_persist_strips_nul_bytes_from_json_fields(repo):
+    tasks_module._persist("j1", {"files": [{
+        "file_id": "f-nul", "filename": "note.pdf", "ok": True,
+        "code_hits": [{"code": "I10", "context": "Essential\u0000 hypertension"}],
+        "code_rejected": [{
+            "code": "19176", "kind": "cpt",
+            "context": 'C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe" \x00 leftover',
+        }],
+        "parse_trail": [{"parser": "text", "note": "ok\u0000"}],
+    }]})
+    row = repo.list_files("j1")[0]
+    assert "\x00" not in row.code_hits[0]["context"]
+    assert "\x00" not in row.code_rejected[0]["context"]
+    assert "chrome.exe" in row.code_rejected[0]["context"]
+    assert "\x00" not in row.parse_trail[0]["note"]
+
+
+def test_persist_skips_a_row_that_cannot_be_saved_and_keeps_going(repo, monkeypatch):
+    real_upsert = repo.upsert_file
+
+    def flaky(job_id, file_id, **fields):
+        if file_id == "boom":
+            raise RuntimeError("disk full")
+        return real_upsert(job_id, file_id, **fields)
+
+    monkeypatch.setattr(repo, "upsert_file", flaky)
+    tasks_module._persist("j1", {"files": [
+        {"file_id": "boom", "filename": "bad.pdf", "ok": True},
+        {"file_id": "ok", "filename": "good.pdf", "ok": True, "output_path": "output/a.pdf"},
+    ]})
+    rows = repo.list_files("j1")
+    assert [r.filename for r in rows] == ["good.pdf"]
+    audits = [e for e in repo.get_job("j1").audit_entries if e.action == "file_skipped"]
+    assert audits[-1].detail["filename"] == "bad.pdf"
+    assert "disk full" in audits[-1].detail["reason"]
+
+
 def test_persist_marks_unparsed_files(repo):
     tasks_module._persist("j1", {"files": [
         {"file_id": "f2", "filename": "bad.pdf", "ok": False, "output_path": None},
@@ -114,3 +151,62 @@ def test_a_batch_interrupt_parks_the_job_and_schedules_a_poll(repo, monkeypatch)
     assert scheduled == [(("j1", "batch-9"), 60)]
     # A batch wait is not an approval; it must not appear in the approvals inbox.
     assert repo.list_approvals("j1") == []
+
+
+def test_checkpoint_survives_an_audit_failure(repo, monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("audit down")
+
+    monkeypatch.setattr(repo, "audit", boom)
+    tasks_module._checkpoint(
+        "j1",
+        "parse_node",
+        {"stage": "parse", "files": [
+            {"file_id": "f1", "filename": "note.txt", "ok": True, "parser": "text"},
+        ]},
+        {"job_id": "j1"},
+    )
+    job = repo.get_job("j1")
+    assert job.stage == "parse"
+    assert repo.list_files("j1")[0].filename == "note.txt"
+
+
+def test_file_tick_survives_an_audit_failure(repo, monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("audit down")
+
+    monkeypatch.setattr(repo, "audit", boom)
+    tasks_module._file_tick(
+        "j1", "parse", 1, 1,
+        {"file_id": "f1", "filename": "note.txt", "ok": True},
+    )
+    assert repo.list_files("j1")[0].filename == "note.txt"
+
+
+def test_handle_interrupt_with_malformed_payload_does_not_raise(repo):
+    parked = tasks_module._handle_interrupt("j1", {"__interrupt__": [FakeInterrupt({})]})
+    assert parked is False or repo.get_job("j1").status != JobStatus.FAILED
+
+
+def test_failed_openai_batch_resumes_instead_of_failing_the_job(repo, monkeypatch):
+    resumed = []
+    monkeypatch.setattr("app.specialty.classifier.poll_batch", lambda _bid: "failed")
+    monkeypatch.setattr(tasks_module.resume_job_task, "delay",
+                        lambda job_id, value: resumed.append((job_id, value)))
+    tasks_module.poll_batch_task.run("j1", "batch-1")
+    assert resumed == [("j1", [])]
+    assert repo.get_job("j1").status != JobStatus.FAILED
+
+
+def test_poll_batch_exception_eventually_resumes(repo, monkeypatch):
+    resumed = []
+
+    def explode(_bid):
+        raise RuntimeError("openai timeout")
+
+    monkeypatch.setattr("app.specialty.classifier.poll_batch", explode)
+    monkeypatch.setattr(tasks_module.resume_job_task, "delay",
+                        lambda job_id, value: resumed.append((job_id, value)))
+    tasks_module.poll_batch_task.run("j1", "batch-1", 5)
+    assert resumed == [("j1", [])]
+    assert repo.get_job("j1").status != JobStatus.FAILED

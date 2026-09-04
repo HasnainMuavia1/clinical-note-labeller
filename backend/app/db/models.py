@@ -36,6 +36,7 @@ class FileStatus(StrEnum):
     PENDING = "pending"
     PARSED = "parsed"
     UNPARSED = "unparsed"
+    SKIPPED = "skipped"
     FILED = "filed"
 
 

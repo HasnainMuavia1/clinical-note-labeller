@@ -177,7 +177,7 @@ Postgres audit table.
 | Container | Role |
 |---|---|
 | `api` | FastAPI, `/api/v1`, uvicorn |
-| `worker` | Celery + Redis; runs the LangGraph job; has egress (OpenAI, LlamaParse, NPI) |
+| `worker` | Celery + Redis; runs the LangGraph job; has egress (OpenAI, LlamaParse, NPI). File and Celery concurrency are planned from CPU/memory/GPU at process start (`GET /api/v1/capacity`). |
 | `parser-sandbox` | Hardened, **no egress** (internal docker network), non-root, read-only mounts, memory/pid/CPU caps, zip-bomb and path-traversal limits |
 | `postgres` | Jobs, LangGraph checkpoints, NPI cache, audit log |
 | `redis` | Celery broker and cache |

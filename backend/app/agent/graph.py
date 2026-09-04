@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import logging
 from contextvars import ContextVar
 from itertools import pairwise
 from pathlib import Path
 from typing import Callable
 
+from langgraph.errors import GraphBubbleUp
 from langgraph.graph import END, START, StateGraph
 
 from . import nodes
+from .pool import skipped
 from .state import JobState
+
+log = logging.getLogger(__name__)
 
 # Celery sets this so the UI can stream plan/reasoning after every node.
 step_listener: ContextVar[Callable[[str, dict, JobState], None] | None] = ContextVar(
@@ -24,10 +29,23 @@ def _delegate(name: str):
     """Look the node up at call time so tests can monkeypatch module attributes."""
 
     async def wrapper(state: JobState) -> dict:
-        result = await getattr(nodes, name)(state)
+        try:
+            result = await getattr(nodes, name)(state)
+        except GraphBubbleUp:
+            raise
+        except Exception as exc:
+            log.exception("node %s failed; skipping files and continuing the job", name)
+            result = {
+                "files": [skipped(record, name, exc) for record in (state.get("files") or [])],
+                "stage": name.removesuffix("_node"),
+                "pending_ops": list(state.get("pending_ops") or []),
+            }
         listener = step_listener.get()
         if listener is not None:
-            listener(name, result, state)
+            try:
+                listener(name, result, state)
+            except Exception:
+                log.exception("step listener failed after %s; continuing", name)
         return result
 
     wrapper.__name__ = name

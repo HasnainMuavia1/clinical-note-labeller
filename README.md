@@ -89,9 +89,12 @@ intake → unpack → parse → detect_codes → resolve_npi → classify
        → plan_placement → [approval_gate] → execute_ops → manifest
 ```
 
-Parse, code detection, and NPI lookup run several files at once
-(`FILE_CONCURRENCY`, default 12). LlamaParse uploads stay inside the official
-paid-plan window (50 / 10s).
+Parse, code detection, NPI lookup, and sync classification run several files
+at once. Worker counts are sized from the machine at startup (CPU, memory,
+GPU). Set `FILE_CONCURRENCY` / `CELERY_CONCURRENCY` to pin them. LlamaParse
+uploads stay inside the official paid-plan window (50 / 10s).
+
+See **Capacity** below.
 
 ### Parsing
 
@@ -147,6 +150,31 @@ Writes go through LangChain `FileManagementToolkit` scoped to the job folder,
 plus a path-traversal / symlink check. ZIP handling refuses zip-slip and caps
 uncompressed size, entry count, and nesting depth.
 
+## Capacity
+
+The worker sizes itself from the box it is running on. Nothing is pinned to
+“12 files / 4 Celery processes” unless you set those env vars.
+
+| Signal | What we do |
+|---|---|
+| CPU count (cgroup affinity) | More file workers and Celery processes |
+| Available memory | Cap file workers at ~256 MB each so a large ZIP cannot OOM |
+| NVIDIA GPU (`nvidia-smi`, `/dev/nvidia*`, or `CUDA_VISIBLE_DEVICES`) | Larger parse/OCR batches and a higher file fan-out |
+| Apple Metal (macOS host, not Docker) | Same GPU boost via the `mps` backend |
+
+`GET /api/v1/capacity` shows the live plan (`cpu_count`, `gpu_count`,
+`file_concurrency`, `celery_concurrency`, `gpu_batch_size`, `ocr_workers`).
+
+On a GPU host, start with the overlay so the containers can see the device:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+```
+
+CPU-only hosts omit that file. Classification still goes to OpenAI; the GPU
+helps by running more parse/OCR/detect batches at once, not by replacing the
+API.
+
 ## Configuration
 
 Copy `.env.example` → `.env`. Secrets come only from the environment.
@@ -156,7 +184,9 @@ Copy `.env.example` → `.env`. Secrets come only from the environment.
 | `OPENAI_API_KEY` / `OPENAI_MINI_MODEL_ID` | Classification model (default `gpt-5.4-mini`) |
 | `LLAMA_CLOUD_API_KEY` | LlamaParse fallback; without it the chain skips to OCR |
 | `LLAMA_PARSE_TIER` | `standard` (paid, 50 uploads / 10s) or `free` (20 / min) |
-| `FILE_CONCURRENCY` | Parallel files in parse / detect / NPI (default `12`) |
+| `FILE_CONCURRENCY` | Parallel files in parse / detect / NPI. `0` = auto from CPU/GPU |
+| `CELERY_CONCURRENCY` | Parallel jobs in the Celery worker. `0` = auto |
+| `OCR_WORKERS` | Parallel Tesseract pages in the sandbox. `0` = auto |
 | `CODE_EVIDENCE_THRESHOLD` | Score a note must clear to be `with-codes` |
 | `SPECIALTY_CONFIDENCE_THRESHOLD` | Below this, a human is asked (default `0.65`) |
 | `LLM_BATCH_MIN_FILES` | Job size that switches sync → Batch API (default `10`) |
@@ -177,7 +207,7 @@ POST /api/v1/jobs/{id}/cancel
 GET  /api/v1/jobs/{id}/tree | /download | /manifest.csv
 GET  /api/v1/codes/lookup?code=
 GET  /api/v1/specialties
-GET  /api/v1/health  /readyz  /version  /metrics
+GET  /api/v1/health  /readyz  /version  /capacity  /metrics
 ```
 
 Open access with a write-side rate limit, RFC 7807 errors, `X-Request-ID`,

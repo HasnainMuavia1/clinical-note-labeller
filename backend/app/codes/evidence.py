@@ -27,7 +27,8 @@ _CONTEXTUAL = {"vitals", "identifier", "age"}
 
 
 def context_of(text: str, candidate: Candidate, window: int = CONTEXT_WINDOW) -> str:
-    return text[max(0, candidate.start - window): candidate.end + window]
+    snippet = text[max(0, candidate.start - window): candidate.end + window]
+    return snippet.replace("\x00", "")
 
 
 def has_positive_cue(text: str, candidate: Candidate) -> bool:

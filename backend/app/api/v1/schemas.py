@@ -32,6 +32,7 @@ class FileDetail(BaseModel):
     confidence: float
     method: str | None
     output_path: str | None
+    skip_reason: str | None = None
 
 
 class JobDetail(JobSummary):

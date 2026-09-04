@@ -16,14 +16,27 @@ from ..parsing.chain import parse_document
 from ..specialty.classifier import ClassificationRequest, classify
 from ..specialty.npi import resolve_specialty_from_npis
 from ..specialty.taxonomy import UNCLASSIFIED, folder_name, normalize_specialty
-from ..workspace.archive import ArchiveError, extract_archive
+from ..runtime.capacity import resolve_capacity
+from ..workspace.archive import extract_archive
 from ..workspace.filetools import FileOp, GuardedFileTools
 from ..workspace.manifest import write_labels_csv, write_manifest, write_output_zip
 from .approvals import approval_payload
-from .pool import map_files
+from .pool import map_files, skipped
 from .state import JobState
 
 log = logging.getLogger(__name__)
+
+
+def _stage_concurrency(stage: str) -> int:
+    configured = get_settings().file_concurrency
+    if configured and configured > 0:
+        return configured
+    plan = resolve_capacity()
+    if stage == "detect_codes":
+        return plan.detect_concurrency
+    if stage == "parse":
+        return plan.parse_concurrency
+    return plan.file_concurrency
 
 
 class ClassificationLike:
@@ -50,10 +63,13 @@ def _tools(state: JobState) -> GuardedFileTools:
     audit_log = Path(state["root"]) / "logs" / "audit.jsonl"
 
     def audit(action: str, detail: dict) -> None:
-        audit_log.parent.mkdir(parents=True, exist_ok=True)
-        with audit_log.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps({"job_id": state.get("job_id"), "action": action,
-                                 "detail": detail}) + "\n")
+        try:
+            audit_log.parent.mkdir(parents=True, exist_ok=True)
+            with audit_log.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"job_id": state.get("job_id"), "action": action,
+                                     "detail": detail}, default=str) + "\n")
+        except Exception:
+            log.exception("workspace audit write failed for %s", action)
 
     return GuardedFileTools(Path(state["root"]), audit)
 
@@ -83,7 +99,39 @@ def _file_record(path: Path, source_path: str) -> dict:
 
 async def intake_node(state: JobState) -> dict:
     input_dir = Path(state["root"]) / "input"
-    files = [_file_record(p, p.name) for p in sorted(input_dir.rglob("*")) if p.is_file()]
+    files: list[dict] = []
+    try:
+        paths = sorted(input_dir.rglob("*")) if input_dir.exists() else []
+    except Exception as exc:
+        log.warning("intake listing failed: %s", exc)
+        return {"files": [], "stage": "intake"}
+    for path in paths:
+        if not path.is_file():
+            continue
+        try:
+            files.append(_file_record(path, path.name))
+        except Exception as exc:
+            log.warning("skipping %s at intake: %s", path.name, exc)
+            files.append(skipped({
+                "file_id": str(uuid.uuid4()),
+                "path": str(path),
+                "filename": path.name,
+                "source_path": path.name,
+                "size_bytes": 0,
+                "sha256": None,
+                "text": "",
+                "parser": None,
+                "parse_trail": [],
+                "ok": False,
+                "has_codes": False,
+                "code_hits": [],
+                "code_rejected": [],
+                "npis": [],
+                "specialty": None,
+                "confidence": 0.0,
+                "method": None,
+                "output_path": None,
+            }, "intake", exc))
     log.info("intake: %d files for job %s", len(files), state.get("job_id"))
     return {"files": files, "stage": "intake"}
 
@@ -99,14 +147,31 @@ async def unpack_node(state: JobState) -> dict:
             continue
         dest = extracted_root / path.stem
         try:
-            entries = extract_archive(path, dest)
-        except ArchiveError as exc:
-            log.warning("archive rejected: %s (%s)", path.name, exc)
-            result.append({**record, "ok": False,
-                           "parse_trail": [{"parser": "zip", "ok": False, "reason": str(exc)}]})
+            extracted = extract_archive(path, dest)
+        except Exception as exc:
+            log.warning("archive skipped: %s (%s)", path.name, exc)
+            result.append(skipped(record, "unpack", exc))
             continue
-        for entry in entries:
-            result.append(_file_record(entry.path, f"{path.name}!/{entry.source_path}"))
+        for row in extracted.skipped:
+            result.append(skipped({
+                "file_id": str(uuid.uuid4()),
+                "path": "",
+                "filename": row.filename,
+                "source_path": f"{path.name}!/{row.source_path}",
+                "size_bytes": 0,
+                "sha256": None,
+            }, "unpack", RuntimeError(row.reason)))
+        for entry in extracted.entries:
+            try:
+                result.append(_file_record(entry.path, f"{path.name}!/{entry.source_path}"))
+            except Exception as exc:
+                log.warning("skipping extracted %s: %s", entry.path.name, exc)
+                result.append(skipped({
+                    "file_id": str(uuid.uuid4()),
+                    "path": str(entry.path),
+                    "filename": entry.path.name,
+                    "source_path": f"{path.name}!/{entry.source_path}",
+                }, "unpack", exc))
     return {"files": result, "stage": "unpack"}
 
 
@@ -121,13 +186,20 @@ async def parse_node(state: JobState) -> dict:
 
     files = await map_files(
         state.get("files", []), work, stage="parse",
-        concurrency=get_settings().file_concurrency,
+        concurrency=_stage_concurrency("parse"),
     )
     return {"files": files, "stage": "parse"}
 
 
 async def detect_codes_node(state: JobState) -> dict:
-    dicts = get_dictionaries()
+    try:
+        dicts = get_dictionaries()
+    except Exception as exc:
+        log.warning("code dictionaries unavailable; continuing without codes: %s", exc)
+        files = [{**record, "has_codes": False, "code_hits": [],
+                  "code_rejected": [], "npis": record.get("npis") or []}
+                 for record in state.get("files", [])]
+        return {"files": files, "stage": "detect_codes"}
     threshold = get_settings().code_evidence_threshold
 
     async def work(record: dict) -> dict:
@@ -142,7 +214,7 @@ async def detect_codes_node(state: JobState) -> dict:
 
     files = await map_files(
         state.get("files", []), work, stage="detect_codes",
-        concurrency=get_settings().file_concurrency,
+        concurrency=_stage_concurrency("detect_codes"),
     )
     return {"files": files, "stage": "detect_codes"}
 
@@ -159,7 +231,7 @@ async def resolve_npi_node(state: JobState) -> dict:
 
     files = await map_files(
         state.get("files", []), work, stage="resolve_npi",
-        concurrency=get_settings().file_concurrency,
+        concurrency=_stage_concurrency("resolve_npi"),
     )
     return {"files": files, "stage": "resolve_npi"}
 
@@ -170,21 +242,45 @@ async def classify_node(state: JobState) -> dict:
         return {"files": state.get("files", []), "stage": "classify"}
 
     requests = [ClassificationRequest(f["file_id"], f.get("text", "")) for f in pending]
-    results, batch_id = await classify(requests, Path(state["root"]) / "batch")
+    try:
+        results, batch_id = await classify(requests, Path(state["root"]) / "batch")
+    except Exception as exc:
+        log.warning("classify failed; skipping %d files: %s", len(pending), exc)
+        by_pending = {f["file_id"] for f in pending}
+        files = [skipped(record, "classify", exc) if record["file_id"] in by_pending else record
+                 for record in state.get("files", [])]
+        return {"files": files, "stage": "classify", "batch_id": None}
+
     if results is None:
         # The Celery task polls the OpenAI batch and resumes the graph with the labels.
         raw = interrupt(approval_payload("batch_pending", {"batch_id": batch_id})) or []
-        results = [ClassificationLike(**r) if isinstance(r, dict) else r for r in raw]
+        if not isinstance(raw, list):
+            raw = [raw]
+        parsed = []
+        for item in raw:
+            try:
+                parsed.append(ClassificationLike(**item) if isinstance(item, dict) else item)
+            except Exception as exc:
+                log.warning("skipping unreadable classification result: %s", exc)
+        results = parsed
 
-    by_id = {r.file_id: r for r in results}
+    by_id = {}
+    for label in results:
+        try:
+            by_id[label.file_id] = label
+        except Exception as exc:
+            log.warning("skipping classification result: %s", exc)
     files = []
     for record in state.get("files", []):
         label = by_id.get(record["file_id"])
         if label is None:
             files.append(record)
             continue
-        files.append({**record, "specialty": normalize_specialty(label.specialty),
-                      "confidence": label.confidence, "method": label.method})
+        try:
+            files.append({**record, "specialty": normalize_specialty(label.specialty),
+                          "confidence": label.confidence, "method": label.method})
+        except Exception as exc:
+            files.append(skipped(record, "classify", exc))
     return {"files": files, "stage": "classify", "batch_id": batch_id}
 
 
@@ -215,29 +311,40 @@ async def plan_placement_node(state: JobState) -> dict:
 
     resolved: list[dict] = []
     for record in files:
-        if record["file_id"] in overrides:
-            record = {**record, "specialty": normalize_specialty(overrides[record["file_id"]]),
-                      "confidence": 1.0, "method": "human"}
-        elif needs_review(record):
-            record = {**record, "specialty": UNCLASSIFIED}
+        try:
+            if record.get("file_id") in overrides:
+                record = {**record, "specialty": normalize_specialty(overrides[record["file_id"]]),
+                          "confidence": 1.0, "method": "human"}
+            elif needs_review(record):
+                record = {**record, "specialty": UNCLASSIFIED}
+        except Exception as exc:
+            record = skipped(record, "plan_placement", exc)
         resolved.append(record)
 
     ops: list[dict] = []
+    planned_files: list[dict] = []
     for record in resolved:
-        if not record.get("ok"):
-            target = tools.unique_target(f"output/unparsed/{record['filename']}")
-            ops.append({"op": "copy", "source": record["path"], "target": target,
-                        "reason": "no parser could extract text", "file_id": record["file_id"]})
-            continue
+        try:
+            if not record.get("ok"):
+                target = tools.unique_target(f"output/unparsed/{record.get('filename') or 'unnamed'}")
+                ops.append({"op": "copy", "source": record.get("path"), "target": target,
+                            "reason": "no parser could extract text",
+                            "file_id": record.get("file_id")})
+                planned_files.append(record)
+                continue
 
-        specialty = record.get("specialty") or UNCLASSIFIED
-        branch = "with-codes" if record.get("has_codes") else "without-codes"
-        target = f"output/{branch}/{folder_name(specialty)}/{record['filename']}"
-        planned = tools.plan_copy(Path(record["path"]), target, f"{branch} / {specialty}")
-        ops.append({"op": planned.op, "source": planned.source, "target": planned.target,
-                    "reason": planned.reason, "file_id": record["file_id"]})
+            specialty = record.get("specialty") or UNCLASSIFIED
+            branch = "with-codes" if record.get("has_codes") else "without-codes"
+            target = f"output/{branch}/{folder_name(specialty)}/{record.get('filename') or 'unnamed'}"
+            planned = tools.plan_copy(Path(record["path"]), target, f"{branch} / {specialty}")
+            ops.append({"op": planned.op, "source": planned.source, "target": planned.target,
+                        "reason": planned.reason, "file_id": record.get("file_id")})
+            planned_files.append(record)
+        except Exception as exc:
+            log.warning("skipping placement for %s: %s", record.get("filename"), exc)
+            planned_files.append(skipped(record, "plan_placement", exc))
 
-    return {"files": resolved, "pending_ops": ops, "stage": "plan_placement"}
+    return {"files": planned_files, "pending_ops": ops, "stage": "plan_placement"}
 
 
 async def approval_gate_node(state: JobState) -> dict:
@@ -252,24 +359,38 @@ async def approval_gate_node(state: JobState) -> dict:
     tools = _tools(state)
     ops = []
     for op in state.get("pending_ops", []):
-        if op["op"] in {"delete", "overwrite"} and op["target"] not in approved_targets:
-            ops.append({**op, "op": "copy", "target": tools.unique_target(op["target"]),
-                        "reason": f"{op['reason']} (approval declined; auto-suffixed)"})
-        else:
-            ops.append({**op, "approved": op["target"] in approved_targets})
+        try:
+            if op["op"] in {"delete", "overwrite"} and op["target"] not in approved_targets:
+                ops.append({**op, "op": "copy", "target": tools.unique_target(op["target"]),
+                            "reason": f"{op['reason']} (approval declined; auto-suffixed)"})
+            else:
+                ops.append({**op, "approved": op["target"] in approved_targets})
+        except Exception as exc:
+            log.warning("skipping approval rewrite for %s: %s", op.get("target"), exc)
+            ops.append({**op, "op": "copy",
+                        "reason": f"{op.get('reason', '')} (approval rewrite failed: {exc})"})
     return {"pending_ops": ops, "stage": "approval_gate"}
 
 
 async def execute_ops_node(state: JobState) -> dict:
     tools = _tools(state)
     outputs: dict[str, str] = {}
+    failed: dict[str, BaseException] = {}
     for op in state.get("pending_ops", []):
-        file_op = FileOp(op["op"], op.get("source"), op["target"], op.get("reason", ""))
-        tools.execute(file_op, approved=bool(op.get("approved")))
-        outputs[op["file_id"]] = op["target"]
+        try:
+            file_op = FileOp(op["op"], op.get("source"), op["target"], op.get("reason", ""))
+            tools.execute(file_op, approved=bool(op.get("approved")))
+            outputs[op["file_id"]] = op["target"]
+        except Exception as exc:
+            log.warning("skipping file op for %s: %s", op.get("file_id"), exc)
+            failed[op["file_id"]] = exc
 
-    files = [{**f, "output_path": outputs.get(f["file_id"], f.get("output_path"))}
-             for f in state.get("files", [])]
+    files = []
+    for record in state.get("files", []):
+        if record["file_id"] in failed:
+            files.append(skipped(record, "execute_ops", failed[record["file_id"]]))
+            continue
+        files.append({**record, "output_path": outputs.get(record["file_id"], record.get("output_path"))})
     return {"files": files, "stage": "execute_ops"}
 
 
@@ -283,7 +404,8 @@ async def manifest_node(state: JobState) -> dict:
             "source_path": record.get("source_path", ""),
             "sha256": record.get("sha256"),
             "size_bytes": record.get("size_bytes", 0),
-            "codes_branch": ("unparsed" if not record.get("ok")
+            "codes_branch": ("skipped" if record.get("skipped")
+                             else "unparsed" if not record.get("ok")
                              else "with-codes" if record.get("has_codes") else "without-codes"),
             "specialty": record.get("specialty") or UNCLASSIFIED,
             "confidence": record.get("confidence", 0.0),
@@ -294,8 +416,12 @@ async def manifest_node(state: JobState) -> dict:
             "code_rejected": record.get("code_rejected", []),
             "npis": record.get("npis", []),
             "output_path": record.get("output_path") or "",
+            "skip_reason": record.get("skip_reason") or "",
         })
-    write_manifest(root / "output" / "manifest.jsonl", records)
-    write_labels_csv(root / "output" / "labels.csv", records)
-    write_output_zip(root / "output", root.parent / f"{root.name}-output.zip")
+    try:
+        write_manifest(root / "output" / "manifest.jsonl", records)
+        write_labels_csv(root / "output" / "labels.csv", records)
+        write_output_zip(root / "output", root.parent / f"{root.name}-output.zip")
+    except Exception as exc:
+        log.warning("manifest write failed; job still completes: %s", exc)
     return {"manifest": records, "stage": "manifest"}

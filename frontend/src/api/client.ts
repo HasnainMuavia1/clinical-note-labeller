@@ -53,6 +53,7 @@ export interface FileDetail {
   confidence: number;
   method: string | null;
   output_path: string | null;
+  skip_reason?: string | null;
 }
 
 export interface Approval {

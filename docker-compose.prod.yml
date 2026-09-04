@@ -16,7 +16,8 @@ x-backend-env: &backend-env
   CODE_EVIDENCE_THRESHOLD: ${CODE_EVIDENCE_THRESHOLD:-1.0}
   SPECIALTY_CONFIDENCE_THRESHOLD: ${SPECIALTY_CONFIDENCE_THRESHOLD:-0.65}
   LLM_BATCH_MIN_FILES: ${LLM_BATCH_MIN_FILES:-10}
-  FILE_CONCURRENCY: ${FILE_CONCURRENCY:-12}
+  FILE_CONCURRENCY: ${FILE_CONCURRENCY:-0}
+  CELERY_CONCURRENCY: ${CELERY_CONCURRENCY:-0}
   LLAMA_PARSE_TIER: ${LLAMA_PARSE_TIER:-standard}
 
 services:
@@ -47,6 +48,8 @@ services:
   parser-sandbox:
     image: ghcr.io/hasnainmuavia1/clinical-note-labeller/sandbox:${IMAGE_TAG:-latest}
     restart: unless-stopped
+    environment:
+      OCR_WORKERS: ${OCR_WORKERS:-0}
     networks: [sandboxnet]
     read_only: true
     tmpfs: ["/tmp:size=2g"]
@@ -80,7 +83,7 @@ services:
       redis: {condition: service_healthy}
     volumes:
       - "${WORKSPACE_DIR:-./workspace}:/data/workspace"
-    command: celery -A app.tasks.celery_app worker --loglevel=INFO --concurrency=4
+    command: celery -A app.tasks.celery_app worker --loglevel=INFO
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.tasks.celery_app inspect ping -d celery@$$HOSTNAME"]
       interval: 30s

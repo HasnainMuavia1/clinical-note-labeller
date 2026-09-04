@@ -9,6 +9,17 @@ def test_version_reports_v1(client):
     assert r.json()["api_version"] == "v1"
 
 
+def test_capacity_reports_planned_workers(client):
+    r = client.get("/api/v1/capacity")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["file_concurrency"] >= 1
+    assert body["celery_concurrency"] >= 1
+    assert "cpu_count" in body
+    assert "gpu_count" in body
+    assert "gpu_batch_size" in body
+
+
 def test_routes_are_open_without_a_key(client):
     r = client.get("/api/v1/specialties")
     assert r.status_code == 200

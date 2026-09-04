@@ -45,6 +45,38 @@ async def test_sync_classification_parses_structured_output(monkeypatch):
     assert results[0] == Classification("f1", "Cardiology", 0.92, "troponin, ECG", "llm_sync")
 
 
+async def test_sync_classification_runs_requests_in_parallel(monkeypatch):
+    import asyncio
+    import time
+
+    inflight = 0
+    peak = 0
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            nonlocal inflight, peak
+            inflight += 1
+            peak = max(peak, inflight)
+            await asyncio.sleep(0.08)
+            inflight -= 1
+            message = SimpleNamespace(content=json.dumps(
+                {"specialty": "Cardiology", "confidence": 0.9, "rationale": "r"}))
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    monkeypatch.setattr(mod, "_async_client", lambda: SimpleNamespace(
+        chat=SimpleNamespace(completions=FakeCompletions())))
+    monkeypatch.setattr(mod, "resolve_llm_sync_concurrency", lambda: 8)
+
+    started = time.monotonic()
+    reqs = [ClassificationRequest(f"f{i}", "note") for i in range(6)]
+    results = await classify_sync(reqs)
+    elapsed = time.monotonic() - started
+
+    assert [r.file_id for r in results] == [f"f{i}" for i in range(6)]
+    assert peak >= 4
+    assert elapsed < 0.35
+
+
 async def test_unknown_specialty_from_the_model_is_normalized(monkeypatch):
     payload = {"specialty": "Cardio Stuff", "confidence": 0.9, "rationale": "r"}
 
@@ -69,6 +101,30 @@ def test_fetch_batch_results_parses_jsonl(monkeypatch):
         ]}},
     }
     content = json.dumps(line).encode()
+
+    class FakeFiles:
+        def content(self, file_id):
+            return SimpleNamespace(read=lambda: content)
+
+    class FakeBatches:
+        def retrieve(self, batch_id):
+            return SimpleNamespace(status="completed", output_file_id="out-1", error_file_id=None)
+
+    monkeypatch.setattr(mod, "_client", lambda: SimpleNamespace(files=FakeFiles(), batches=FakeBatches()))
+
+    results = fetch_batch_results("batch-1")
+    assert results == [Classification("f7", "Dermatology", 0.81, "rash", "llm_batch")]
+
+
+def test_fetch_batch_results_skips_a_bad_line_and_keeps_the_rest(monkeypatch):
+    good = {
+        "custom_id": "f7",
+        "response": {"status_code": 200, "body": {"choices": [
+            {"message": {"content": json.dumps(
+                {"specialty": "Dermatology", "confidence": 0.81, "rationale": "rash"})}}
+        ]}},
+    }
+    content = b"not-json\n" + json.dumps(good).encode() + b"\n"
 
     class FakeFiles:
         def content(self, file_id):

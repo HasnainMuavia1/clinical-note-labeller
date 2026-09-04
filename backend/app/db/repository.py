@@ -10,6 +10,18 @@ from sqlalchemy.orm import selectinload, sessionmaker
 from .models import Approval, ApprovalStatus, AuditEntry, Job, JobFile, JobStatus, NpiCache
 
 
+def json_safe(value):
+    """Postgres JSON/text cannot store NUL (\\u0000). Strip it from nested structures."""
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, list):
+        return [json_safe(item) for item in value]
+    if isinstance(value, dict):
+        return {json_safe(key) if isinstance(key, str) else key: json_safe(item)
+                for key, item in value.items()}
+    return value
+
+
 def _encode_cursor(created_at: datetime, job_id: str) -> str:
     payload = json.dumps([created_at.isoformat(), job_id])
     return base64.urlsafe_b64encode(payload.encode()).decode()
@@ -76,7 +88,7 @@ class Repository:
         with self._sf() as s:
             job = s.get(Job, job_id)
             for key, value in fields.items():
-                setattr(job, key, value)
+                setattr(job, key, json_safe(value))
             s.commit()
         return self.get_job(job_id)
 
@@ -90,7 +102,7 @@ class Repository:
                 row = JobFile(job_id=job_id, file_id=file_id)
                 s.add(row)
             for key, value in fields.items():
-                setattr(row, key, value)
+                setattr(row, key, json_safe(value))
             s.commit()
             return row
 
@@ -103,7 +115,7 @@ class Repository:
     # approvals ------------------------------------------------------------
     def create_approval(self, job_id: str, kind: str, payload: dict) -> Approval:
         with self._sf() as s:
-            approval = Approval(job_id=job_id, kind=kind, payload=payload)
+            approval = Approval(job_id=job_id, kind=kind, payload=json_safe(payload))
             s.add(approval)
             s.commit()
             return approval
@@ -128,7 +140,7 @@ class Repository:
     # audit ----------------------------------------------------------------
     def audit(self, job_id: str, action: str, detail: dict) -> AuditEntry:
         with self._sf() as s:
-            entry = AuditEntry(job_id=job_id, action=action, detail=detail)
+            entry = AuditEntry(job_id=job_id, action=action, detail=json_safe(detail))
             s.add(entry)
             s.commit()
             return entry

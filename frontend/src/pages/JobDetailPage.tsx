@@ -46,6 +46,7 @@ export default function JobDetailPage() {
             <th>Specialty</th>
             <th>Method</th>
             <th>Confidence</th>
+            <th>Skip reason</th>
           </tr>
         </thead>
         <tbody>
@@ -53,15 +54,18 @@ export default function JobDetailPage() {
             <tr key={file.file_id} onClick={() => setSelected(file)}>
               <td>{file.filename}</td>
               <td>
-                {file.status === 'unparsed'
-                  ? 'unparsed'
-                  : file.has_codes
-                    ? 'with-codes'
-                    : 'without-codes'}
+                {file.status === 'skipped'
+                  ? 'skipped'
+                  : file.status === 'unparsed'
+                    ? 'unparsed'
+                    : file.has_codes
+                      ? 'with-codes'
+                      : 'without-codes'}
               </td>
               <td>{file.specialty ?? '—'}</td>
               <td>{file.method ?? '—'}</td>
               <td>{file.confidence.toFixed(2)}</td>
+              <td>{file.skip_reason || (file.status === 'skipped' ? file.parse_trail.at(-1)?.reason : null) || '—'}</td>
             </tr>
           ))}
         </tbody>

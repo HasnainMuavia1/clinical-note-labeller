@@ -64,3 +64,19 @@ async def test_graph_interrupts_when_an_op_needs_approval_and_resumes(workspace,
         Command(resume={"decisions": {payload["ops"][0]["target"]: "approve"}}), config)
     assert target.read_text().startswith("Diagnosis Code")
     assert len(resumed["manifest"]) == 2
+
+
+async def test_graph_continues_when_a_mid_pipeline_node_raises(workspace, stub_nodes, monkeypatch):
+    async def boom(_state):
+        raise RuntimeError("code dictionaries exploded")
+
+    monkeypatch.setattr(node_module, "detect_codes_node", boom)
+    graph = build_graph(MemorySaver())
+    config = {"configurable": {"thread_id": "job-survive"}}
+    result = await graph.ainvoke({"job_id": "job-survive", "root": str(workspace)}, config)
+
+    assert "__interrupt__" not in result
+    assert (workspace / "output" / "manifest.jsonl").exists()
+    assert result.get("manifest")
+    assert any(row.get("skip_reason") and "dictionaries exploded" in row["skip_reason"]
+               for row in result["manifest"])

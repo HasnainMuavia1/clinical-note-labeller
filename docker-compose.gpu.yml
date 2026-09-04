@@ -1,0 +1,21 @@
+# Optional overlay: attach NVIDIA GPUs to the worker and parser.
+# Requires the NVIDIA Container Toolkit on the host.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+#   docker compose -f docker-compose.prod.yml -f docker-compose.gpu.yml up -d
+#
+# CPU-only hosts should omit this file. The worker still auto-sizes from CPU.
+
+services:
+  worker:
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    gpus: all
+
+  parser-sandbox:
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      OCR_WORKERS: ${OCR_WORKERS:-0}
+    gpus: all

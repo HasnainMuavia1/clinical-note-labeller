@@ -44,6 +44,38 @@ def test_reports_failure_for_unreadable_pdf(sandbox_client):
     assert body["reason"]
 
 
+def test_ocr_pages_run_in_parallel_when_workers_gt_one(sandbox_client, monkeypatch, tmp_path):
+    import sandbox_app
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    inflight = 0
+    peak = 0
+
+    def fake_run(cmd, check=True, timeout=600, capture_output=True):
+        nonlocal inflight, peak
+        if cmd[0] == "pdftoppm":
+            out_prefix = cmd[-1]
+            for i in range(3):
+                Path(f"{out_prefix}-{i}.png").write_bytes(b"png")
+            return type("P", (), {"stdout": b"", "returncode": 0})()
+        inflight += 1
+        peak = max(peak, inflight)
+        time.sleep(0.05)
+        inflight -= 1
+        return type("P", (), {"stdout": b"page text", "returncode": 0})()
+
+    monkeypatch.setattr(sandbox_app.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(sandbox_app.subprocess, "run", fake_run)
+    monkeypatch.setattr(sandbox_app, "_ocr_workers", lambda: 3)
+    monkeypatch.setattr(sandbox_app, "ThreadPoolExecutor", ThreadPoolExecutor)
+
+    text, pages = sandbox_app._parse_ocr(b"%PDF-1.4 fake", ".pdf")
+    assert pages == 3
+    assert "page text" in text
+    assert peak >= 2
+
+
 def test_empty_file_is_reported_as_failure(sandbox_client):
     files = {"file": ("empty.txt", io.BytesIO(b"   \n  "), "text/plain")}
     body = sandbox_client.post("/parse", files=files).json()

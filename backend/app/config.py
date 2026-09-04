@@ -32,7 +32,8 @@ class Settings(BaseSettings):
     code_evidence_threshold: float = 1.0
     specialty_confidence_threshold: float = 0.65
     llm_batch_min_files: int = 10
-    file_concurrency: int = 12
+    file_concurrency: int = 0
+    celery_concurrency: int = 0
     max_upload_bytes: int = 5 * 1024**3
 
     @field_validator("api_keys", mode="before")

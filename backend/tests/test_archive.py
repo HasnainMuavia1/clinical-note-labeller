@@ -1,8 +1,6 @@
 import zipfile
 
-import pytest
-
-from app.workspace.archive import ArchiveError, extract_archive
+from app.workspace.archive import extract_archive
 
 
 def make_zip(path, entries):
@@ -38,32 +36,51 @@ def test_extracts_nested_archives_recursively(tmp_path):
     assert any("inner.zip" in e.source_path for e in entries)
 
 
-def test_rejects_zip_slip(tmp_path):
-    archive = tmp_path / "evil.zip"
+def test_skips_a_zip_slip_entry_and_keeps_the_rest(tmp_path):
+    archive = tmp_path / "mixed.zip"
     with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("good.txt", "ok")
         zf.writestr("../escaped.txt", "bad")
-    with pytest.raises(ArchiveError, match="outside"):
-        extract_archive(archive, tmp_path / "out")
+    extracted = extract_archive(archive, tmp_path / "out")
+    assert {e.path.name for e in extracted} == {"good.txt"}
+    assert extracted.skipped
+    assert any("outside" in row.reason or "escaped" in row.source_path for row in extracted.skipped)
+    assert not (tmp_path / "escaped.txt").exists()
 
 
-def test_rejects_zip_bomb_over_byte_budget(tmp_path):
-    archive = make_zip(tmp_path / "bomb.zip", {"big.txt": "A" * 100_000})
-    with pytest.raises(ArchiveError, match="budget"):
-        extract_archive(archive, tmp_path / "out", max_total_bytes=1000)
+def test_skips_entries_over_the_byte_budget_and_keeps_earlier_ones(tmp_path):
+    archive = make_zip(tmp_path / "bomb.zip", {"small.txt": "ok", "big.txt": "A" * 100_000})
+    extracted = extract_archive(archive, tmp_path / "out", max_total_bytes=1000)
+    names = {e.path.name for e in extracted}
+    assert "small.txt" in names
+    assert "big.txt" not in names
+    assert any("budget" in row.reason for row in extracted.skipped)
 
 
-def test_rejects_too_many_entries(tmp_path):
+def test_skips_entries_past_the_count_limit_and_keeps_earlier_ones(tmp_path):
     archive = make_zip(tmp_path / "many.zip", {f"n{i}.txt": "x" for i in range(20)})
-    with pytest.raises(ArchiveError, match="entries"):
-        extract_archive(archive, tmp_path / "out", max_entries=5)
+    extracted = extract_archive(archive, tmp_path / "out", max_entries=5)
+    assert len(extracted.entries) == 5
+    assert len(extracted.skipped) == 15
+    assert all("entries" in row.reason for row in extracted.skipped)
 
 
-def test_rejects_excessive_nesting_depth(tmp_path):
+def test_skips_excessive_nesting_and_keeps_shallower_files(tmp_path):
     current = make_zip(tmp_path / "l0.zip", {"leaf.txt": "x"})
     for level in range(1, 4):
         nxt = tmp_path / f"l{level}.zip"
         with zipfile.ZipFile(nxt, "w") as zf:
             zf.write(current, f"l{level - 1}.zip")
         current = nxt
-    with pytest.raises(ArchiveError, match="depth"):
-        extract_archive(current, tmp_path / "out", max_depth=2)
+    extracted = extract_archive(current, tmp_path / "out", max_depth=2)
+    assert extracted.skipped
+    assert any("depth" in row.reason for row in extracted.skipped)
+
+
+def test_corrupt_archive_is_skipped_instead_of_raising(tmp_path):
+    archive = tmp_path / "broken.zip"
+    archive.write_bytes(b"this is not a zip")
+    extracted = extract_archive(archive, tmp_path / "out")
+    assert extracted.entries == []
+    assert extracted.skipped
+    assert "broken.zip" in extracted.skipped[0].filename
