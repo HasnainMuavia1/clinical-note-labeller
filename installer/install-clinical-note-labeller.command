@@ -8,6 +8,7 @@
 set -uo pipefail
 
 COMPOSE_URL="https://raw.githubusercontent.com/HasnainMuavia1/clinical-note-labeller/main/docker-compose.prod.yml"
+GPU_COMPOSE_URL="https://raw.githubusercontent.com/HasnainMuavia1/clinical-note-labeller/main/docker-compose.gpu.yml"
 IMAGE_TAG="@@IMAGE_TAG@@"
 OPENAI_API_KEY="@@OPENAI_API_KEY@@"
 OPENAI_MINI_MODEL_ID="@@OPENAI_MINI_MODEL_ID@@"
@@ -102,6 +103,7 @@ say "      Labelled output will appear in: $DATA_DIR/workspace"
 # ---- 4. Compose file and configuration ---------------------------------------
 step "[4/6] Downloading the application definition..."
 curl -fsSL -o "$INSTALL_DIR/docker-compose.yml" "$COMPOSE_URL" || die "Could not download the application definition."
+curl -fsSL -o "$INSTALL_DIR/docker-compose.gpu.yml" "$GPU_COMPOSE_URL" || true
 
 pick_port() {                     # pick_port <preferred>  -> echoes a free port
     local p=$1
@@ -130,7 +132,18 @@ say "      The first run downloads about 320 MB. Later runs are almost instant."
 say ""
 cd "$INSTALL_DIR" || die "Could not enter $INSTALL_DIR"
 docker compose pull || die "Could not download the application images. If this said 'denied' or 'unauthorized', the published packages are private - see PUBLISHING.md."
-docker compose up -d || die "The application failed to start. Run: docker compose -f '$INSTALL_DIR/docker-compose.yml' logs"
+COMPOSE_GPU=()
+if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1 && [ -f "$INSTALL_DIR/docker-compose.gpu.yml" ]; then
+    say "      NVIDIA GPU found; attaching it automatically."
+    COMPOSE_GPU=(-f docker-compose.yml -f docker-compose.gpu.yml)
+fi
+if [ "${#COMPOSE_GPU[@]}" -gt 0 ]; then
+    docker compose "${COMPOSE_GPU[@]}" up -d \
+        || docker compose up -d \
+        || die "The application failed to start. Run: docker compose -f '$INSTALL_DIR/docker-compose.yml' logs"
+else
+    docker compose up -d || die "The application failed to start. Run: docker compose -f '$INSTALL_DIR/docker-compose.yml' logs"
+fi
 
 # ---- 6. Wait for health, open the browser -------------------------------------
 step "[6/6] Waiting for the application to be ready..."

@@ -19,7 +19,9 @@ def sandbox_client():
 
 
 def test_health(sandbox_client):
-    assert sandbox_client.get("/health").json()["status"] == "ok"
+    body = sandbox_client.get("/health").json()
+    assert body["status"] == "ok"
+    assert body["ocr_engine"] == "tesseract"
 
 
 def test_parses_plain_text(sandbox_client):
@@ -67,10 +69,10 @@ def test_ocr_pages_run_in_parallel_when_workers_gt_one(sandbox_client, monkeypat
 
     monkeypatch.setattr(sandbox_app.shutil, "which", lambda name: f"/bin/{name}")
     monkeypatch.setattr(sandbox_app.subprocess, "run", fake_run)
-    monkeypatch.setattr(sandbox_app, "_ocr_workers", lambda: 3)
+    monkeypatch.setattr(sandbox_app, "_ocr_workers", lambda: 1)
     monkeypatch.setattr(sandbox_app, "ThreadPoolExecutor", ThreadPoolExecutor)
 
-    text, pages = sandbox_app._parse_ocr(b"%PDF-1.4 fake", ".pdf")
+    text, pages = sandbox_app._parse_ocr(b"%PDF-1.4 fake", ".pdf", workers=3)
     assert pages == 3
     assert "page text" in text
     assert peak >= 2

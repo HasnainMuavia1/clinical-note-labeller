@@ -1,7 +1,7 @@
 .PHONY: up down logs ps test test-backend test-frontend build-frontend fmt
 
 up:
-	docker compose up --build -d
+	python3 tools/stack.py up --build -d
 
 down:
 	docker compose down

@@ -18,6 +18,7 @@ def test_capacity_reports_planned_workers(client):
     assert "cpu_count" in body
     assert "gpu_count" in body
     assert "gpu_batch_size" in body
+    assert body["ocr_engine"] == "tesseract"
 
 
 def test_routes_are_open_without_a_key(client):

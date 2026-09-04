@@ -65,6 +65,7 @@ services:
     build: ./sandbox
     environment:
       OCR_WORKERS: ${OCR_WORKERS:-0}
+      SANDBOX_WORKERS: ${SANDBOX_WORKERS:-2}
     networks: [sandboxnet]
     read_only: true
     tmpfs: ["/tmp:size=2g"]

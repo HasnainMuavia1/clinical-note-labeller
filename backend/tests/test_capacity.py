@@ -33,6 +33,7 @@ def test_gpu_raises_batch_size_and_parse_concurrency():
     assert gpu.file_concurrency >= cpu.file_concurrency
     assert gpu.parse_concurrency >= gpu.file_concurrency
     assert gpu.ocr_workers >= 4
+    assert gpu.parse_concurrency >= gpu.gpu_batch_size
 
 
 def test_memory_ceiling_caps_file_workers():
@@ -111,6 +112,27 @@ def test_resolve_capacity_is_cached_until_cleared(monkeypatch):
     cap.resolve_capacity.cache_clear()
     second = cap.resolve_capacity()
     assert second.file_concurrency != first.file_concurrency
+
+
+def test_compose_files_add_gpu_overlay_only_when_nvidia_is_on_the_host(tmp_path, monkeypatch):
+    from app.runtime.compose import compose_argv
+
+    base = tmp_path / "docker-compose.yml"
+    overlay = tmp_path / "docker-compose.gpu.yml"
+    base.write_text("name: x\n")
+    overlay.write_text("name: x\n")
+    monkeypatch.setattr("app.runtime.compose.host_can_pass_nvidia", lambda: True)
+    assert compose_argv(tmp_path) == ["-f", str(base), "-f", str(overlay)]
+    monkeypatch.setattr("app.runtime.compose.host_can_pass_nvidia", lambda: False)
+    assert compose_argv(tmp_path) == ["-f", str(base)]
+
+
+def test_compose_files_stay_cpu_only_if_overlay_is_missing(tmp_path, monkeypatch):
+    from app.runtime.compose import compose_argv
+
+    (tmp_path / "docker-compose.yml").write_text("name: x\n")
+    monkeypatch.setattr("app.runtime.compose.host_can_pass_nvidia", lambda: True)
+    assert compose_argv(tmp_path) == ["-f", str(tmp_path / "docker-compose.yml")]
 
 
 def test_celery_picks_up_planned_concurrency(monkeypatch):

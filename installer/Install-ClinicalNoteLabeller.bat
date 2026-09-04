@@ -13,6 +13,7 @@ REM ============================================================================
 
 REM ---- settings (the build script fills these in) ----------------------------
 set "COMPOSE_URL=https://raw.githubusercontent.com/HasnainMuavia1/clinical-note-labeller/main/docker-compose.prod.yml"
+set "GPU_COMPOSE_URL=https://raw.githubusercontent.com/HasnainMuavia1/clinical-note-labeller/main/docker-compose.gpu.yml"
 set "IMAGE_TAG=@@IMAGE_TAG@@"
 set "OPENAI_API_KEY=@@OPENAI_API_KEY@@"
 set "OPENAI_MINI_MODEL_ID=@@OPENAI_MINI_MODEL_ID@@"
@@ -136,6 +137,7 @@ if not exist "%INSTALL_DIR%\docker-compose.yml" (
     echo       Check the internet connection and run this file again.
     goto :fail
 )
+curl.exe -fsSL -o "%INSTALL_DIR%\docker-compose.gpu.yml" "%GPU_COMPOSE_URL%" >nul 2>&1
 
 call :pick_port 8000 API_PORT
 call :pick_port 5173 UI_PORT
@@ -166,8 +168,15 @@ if %ERRORLEVEL% NEQ 0 (
     echo       are still private - see PUBLISHING.md in the repository.
     goto :fail
 )
-docker compose up -d
-if %ERRORLEVEL% NEQ 0 (
+where nvidia-smi >nul 2>&1
+if %ERRORLEVEL% EQU 0 if exist "%INSTALL_DIR%\docker-compose.gpu.yml" (
+    echo       NVIDIA GPU found; attaching it automatically.
+    docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+    if !ERRORLEVEL! NEQ 0 docker compose up -d
+) else (
+    docker compose up -d
+)
+if !ERRORLEVEL! NEQ 0 (
     popd
     echo   [X] The application failed to start.
     echo       Run this for details:  docker compose -f "%INSTALL_DIR%\docker-compose.yml" logs

@@ -64,6 +64,11 @@ try:
     apply_celery_concurrency(celery_app)
 except Exception:
     log.exception("capacity planner failed; using Celery default concurrency")
+try:
+    from .codes.dictionaries import get_dictionaries
+    get_dictionaries()
+except Exception:
+    log.exception("code dictionaries failed to warm; first detect will retry")
 
 
 async def _with_checkpointer(coro_factory):

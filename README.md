@@ -98,12 +98,21 @@ See **Capacity** below.
 
 ### Parsing
 
-`pypdf` / `python-docx` / charset-detected text → **LlamaParse** (failures only)
-→ **Tesseract OCR** → `output/unparsed/`. Each hop is stored as `parse_trail`.
+On CPU: `pypdf` / `python-docx` / text → **LlamaParse** (failures only) →
+**Tesseract OCR** → `output/unparsed/`.
+
+On a CUDA GPU: **Tesseract first** (PDFs and images only), then pypdf, then
+LlamaParse. Tesseract itself is CPU/LSTM (`--oem 1`); the GPU speeds the job
+by running more page OCR and more files at once, not by replacing Tesseract
+with a CUDA model. Each hop is stored as `parse_trail`.
 
 LlamaParse is called over REST from the worker, not via the full `llama-index`
 SDK. Local parse + OCR run in `parser-sandbox`: internal Docker network, no
 internet, no API keys, read-only root, dropped capabilities.
+
+OCR is **Tesseract** (`tesseract-ocr` in the sandbox image). It is the last
+hop: digital text (`pypdf` / `python-docx` / charset text) → LlamaParse →
+Tesseract. `GET /api/v1/capacity` reports `ocr_engine: tesseract`.
 
 ### Code detection
 
@@ -163,17 +172,13 @@ The worker sizes itself from the box it is running on. Nothing is pinned to
 | Apple Metal (macOS host, not Docker) | Same GPU boost via the `mps` backend |
 
 `GET /api/v1/capacity` shows the live plan (`cpu_count`, `gpu_count`,
-`file_concurrency`, `celery_concurrency`, `gpu_batch_size`, `ocr_workers`).
+`file_concurrency`, `celery_concurrency`, `gpu_batch_size`, `ocr_engine`).
 
-On a GPU host, start with the overlay so the containers can see the device:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
-```
-
-CPU-only hosts omit that file. Classification still goes to OpenAI; the GPU
-helps by running more parse/OCR/detect batches at once, not by replacing the
-API.
+`make up` probes the host. If `nvidia-smi` (or `/dev/nvidia*`) is present it
+attaches the GPU overlay by itself; if attach fails it starts CPU-only. You
+do not pass compose files by hand. Classification still goes to OpenAI. A GPU does not run Tesseract on CUDA —
+it raises page-OCR workers and file fan-out, and puts Tesseract first on
+scanned PDFs.
 
 ## Configuration
 

@@ -72,7 +72,7 @@ def plan_capacity(hardware: HardwareProfile,
         gpu_batch = min(32, max(8, gpu_n * 8))
 
     detect_c = min(file_c, max(2, cpus))
-    parse_c = file_c
+    parse_c = max(file_c, gpu_batch)
     llm_sync_c = min(16, max(4, file_c))
     ocr_workers = min(8, max(1, cpus if not gpu_n else max(cpus, gpu_n * 4)))
 

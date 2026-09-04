@@ -8,6 +8,8 @@ from ..config import get_settings
 from .llamaparse import llamaparse_text
 from .sandbox_client import call_sandbox
 
+OCR_FIRST_SUFFIXES = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp", ".bmp"}
+
 log = logging.getLogger(__name__)
 
 
@@ -58,27 +60,51 @@ async def parse_via_llamaparse(path: Path) -> ParseResult:
                        [ParseAttempt("llamaparse", ok, None if ok else "no extractable text")])
 
 
+def ocr_first() -> bool:
+    """Tesseract-first only when a CUDA GPU can actually reach the sandbox."""
+    try:
+        from ..runtime.hardware import detect_gpus
+        return any(gpu.backend == "cuda" for gpu in detect_gpus())
+    except Exception:
+        return False
+
+
+def should_ocr_first(path: Path) -> bool:
+    return ocr_first() and path.suffix.lower() in OCR_FIRST_SUFFIXES
+
+
+def _take(trail: list[ParseAttempt], result: ParseResult) -> ParseResult | None:
+    trail.extend(result.trail)
+    if result.ok:
+        parser = "ocr" if result.parser == "ocr" else result.parser
+        return ParseResult(result.text, parser, result.pages, True, trail)
+    return None
+
+
 async def parse_document(path: Path) -> ParseResult:
-    """pypdf/docx/text -> LlamaParse -> OCR -> failure. Records every hop."""
+    """CPU: pypdf → LlamaParse → Tesseract. GPU: Tesseract → pypdf → LlamaParse."""
     import sys
 
     module = sys.modules[__name__]
     trail: list[ParseAttempt] = []
 
-    primary = await module.parse_via_sandbox(path)
-    trail.extend(primary.trail)
-    if primary.ok:
-        return ParseResult(primary.text, primary.parser, primary.pages, True, trail)
+    if module.should_ocr_first(path):
+        hops = (
+            lambda: module.parse_via_sandbox(path, ocr=True),
+            lambda: module.parse_via_sandbox(path),
+            lambda: module.parse_via_llamaparse(path),
+        )
+    else:
+        hops = (
+            lambda: module.parse_via_sandbox(path),
+            lambda: module.parse_via_llamaparse(path),
+            lambda: module.parse_via_sandbox(path, ocr=True),
+        )
 
-    secondary = await module.parse_via_llamaparse(path)
-    trail.extend(secondary.trail)
-    if secondary.ok:
-        return ParseResult(secondary.text, secondary.parser, secondary.pages, True, trail)
-
-    tertiary = await module.parse_via_sandbox(path, ocr=True)
-    trail.extend(tertiary.trail)
-    if tertiary.ok:
-        return ParseResult(tertiary.text, "ocr", tertiary.pages, True, trail)
+    for hop in hops:
+        won = _take(trail, await hop())
+        if won is not None:
+            return won
 
     log.warning("all parsers failed for %s", path.name)
     return ParseResult("", "none", 0, False, trail)

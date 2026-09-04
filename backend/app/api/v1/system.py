@@ -42,4 +42,7 @@ def capacity() -> dict:
         "llm_sync_concurrency": plan.llm_sync_concurrency,
         "gpu_batch_size": plan.gpu_batch_size,
         "ocr_workers": plan.ocr_workers,
+        "ocr_engine": "tesseract",
+        "ocr_package": "tesseract-ocr",
+        "ocr_host": "parser-sandbox",
     }

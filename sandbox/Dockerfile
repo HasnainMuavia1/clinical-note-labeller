@@ -8,8 +8,9 @@ RUN useradd --create-home --uid 10001 sandbox
 WORKDIR /srv
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY app.py .
+COPY app.py start.sh ./
+RUN chmod +x start.sh
 
 USER sandbox
 EXPOSE 8081
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8081"]
+CMD ["./start.sh"]
