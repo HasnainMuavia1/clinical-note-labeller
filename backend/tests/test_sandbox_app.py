@@ -78,6 +78,32 @@ def test_ocr_pages_run_in_parallel_when_workers_gt_one(sandbox_client, monkeypat
     assert peak >= 2
 
 
+def _workspace_pdf() -> Path | None:
+    root = Path(__file__).resolve().parents[2] / "workspace"
+    if not root.is_dir():
+        return None
+    extracted = list(root.rglob("extracted/**/*.pdf"))
+    if extracted:
+        return extracted[0]
+    hits = [p for p in root.rglob("*.pdf") if p.is_file()]
+    return hits[0] if hits else None
+
+
+def test_ocr_reads_text_from_a_workspace_pdf(sandbox_client):
+    import shutil
+
+    import sandbox_app
+
+    if not shutil.which("tesseract") or not shutil.which("pdftoppm"):
+        pytest.skip("tesseract/pdftoppm are not installed on this host")
+    pdf = _workspace_pdf()
+    if pdf is None:
+        pytest.skip("no workspace PDF available")
+    text, pages = sandbox_app._parse_ocr(pdf.read_bytes(), ".pdf")
+    assert pages >= 1
+    assert text.strip(), f"OCR returned empty text for {pdf.name}"
+
+
 def test_empty_file_is_reported_as_failure(sandbox_client):
     files = {"file": ("empty.txt", io.BytesIO(b"   \n  "), "text/plain")}
     body = sandbox_client.post("/parse", files=files).json()

@@ -61,10 +61,17 @@ def _ocr_workers() -> int:
 
 
 def _ocr_page(image: Path) -> str:
-    proc = subprocess.run(
+    attempts = (
         ["tesseract", str(image), "stdout", "--oem", "1", "--psm", "6"],
-        check=True, timeout=600, capture_output=True)
-    return proc.stdout.decode("utf-8", errors="replace")
+        ["tesseract", str(image), "stdout"],
+    )
+    last_err = b"tesseract failed"
+    for cmd in attempts:
+        proc = subprocess.run(cmd, check=False, timeout=600, capture_output=True)
+        if proc.returncode == 0:
+            return proc.stdout.decode("utf-8", errors="replace")
+        last_err = proc.stderr or proc.stdout or last_err
+    raise RuntimeError(last_err.decode("utf-8", errors="replace")[:300])
 
 
 def _parse_ocr(data: bytes, suffix: str, workers: int | None = None) -> tuple[str, int]:
@@ -79,6 +86,8 @@ def _parse_ocr(data: bytes, suffix: str, workers: int | None = None) -> tuple[st
             subprocess.run(["pdftoppm", "-r", "200", "-png", str(src), f"{tmp}/page"],
                            check=True, timeout=600, capture_output=True)
             images = sorted(Path(tmp).glob("page*.png"))
+            if not images:
+                raise RuntimeError("pdftoppm produced no page images")
         else:
             images = [src]
         planned = workers if workers and workers > 0 else _ocr_workers()
