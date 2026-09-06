@@ -5,7 +5,10 @@ import json
 import zipfile
 from pathlib import Path
 
+from ..specialty.folder_hint import folder_compare
+
 CSV_COLUMNS = ["file_id", "filename", "source_path", "codes_branch", "specialty",
+               "folder_label", "expected_specialty", "label_match",
                "confidence", "method", "parser", "output_path", "code_count",
                "skip_reason"]
 
@@ -24,6 +27,9 @@ def write_labels_csv(path: Path, records: list[dict]) -> None:
         writer.writeheader()
         for record in records:
             row = {key: record.get(key, "") for key in CSV_COLUMNS}
+            compare = folder_compare(record.get("source_path"), record.get("specialty"))
+            for key, value in compare.items():
+                row[key] = "" if value is None else value
             row["code_count"] = len(record.get("code_hits") or [])
             writer.writerow(row)
 

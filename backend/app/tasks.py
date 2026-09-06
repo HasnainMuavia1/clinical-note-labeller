@@ -12,6 +12,42 @@ from .storage import job_root
 
 log = logging.getLogger(__name__)
 _settings = get_settings()
+JOB_LOCK_TTL_SECONDS = 30 * 60
+
+
+def _job_lock_key(job_id: str) -> str:
+    return f"labeller:job-lock:{job_id}"
+
+
+def _redis():
+    import redis
+    return redis.Redis.from_url(_settings.redis_url)
+
+
+def try_acquire_job_lock(job_id: str) -> bool:
+    return bool(_redis().set(_job_lock_key(job_id), "1", nx=True, ex=JOB_LOCK_TTL_SECONDS))
+
+
+def job_lock_held(job_id: str) -> bool:
+    try:
+        return bool(_redis().exists(_job_lock_key(job_id)))
+    except Exception:
+        log.exception("job lock check failed for %s", job_id)
+        return False
+
+
+def refresh_job_lock(job_id: str) -> None:
+    try:
+        _redis().expire(_job_lock_key(job_id), JOB_LOCK_TTL_SECONDS)
+    except Exception:
+        log.exception("job lock refresh failed for %s", job_id)
+
+
+def release_job_lock(job_id: str) -> None:
+    try:
+        _redis().delete(_job_lock_key(job_id))
+    except Exception:
+        log.exception("job lock release failed for %s", job_id)
 
 STAGE_PROGRESS = {
     "intake": 0.08,
@@ -53,6 +89,7 @@ def _file_tick(job_id: str, stage: str, done: int, total: int, record: dict) -> 
                 "stage": stage, "done": done, "total": total,
                 "filename": record.get("filename"),
             })
+        refresh_job_lock(job_id)
     except Exception:
         log.exception("file tick failed for %s; continuing", record.get("filename"))
 
@@ -215,8 +252,15 @@ def _unlisten(tokens) -> None:
 def run_job_task(job_id: str) -> None:
     from .agent.graph import run_job
 
+    if not try_acquire_job_lock(job_id):
+        log.warning("job %s already running; ignoring duplicate dispatch", job_id)
+        return
     repo = get_repository()
-    repo.update_job(job_id, status=JobStatus.RUNNING, stage="intake")
+    job = repo.get_job(job_id)
+    if job and job.stage and job.stage != "intake":
+        repo.update_job(job_id, status=JobStatus.RUNNING)
+    else:
+        repo.update_job(job_id, status=JobStatus.RUNNING, stage="intake")
     try:
         tokens = _listen(job_id)
         try:
@@ -237,12 +281,17 @@ def run_job_task(job_id: str) -> None:
                             error=str(exc))
         except Exception:
             repo.update_job(job_id, status=JobStatus.FAILED, error=str(exc))
+    finally:
+        release_job_lock(job_id)
 
 
 @celery_app.task(name="jobs.resume")
 def resume_job_task(job_id: str, resume_value) -> None:
     from .agent.graph import resume_job
 
+    if not try_acquire_job_lock(job_id):
+        log.warning("job %s already running; ignoring duplicate resume", job_id)
+        return
     repo = get_repository()
     repo.update_job(job_id, status=JobStatus.RUNNING)
     try:
@@ -265,6 +314,8 @@ def resume_job_task(job_id: str, resume_value) -> None:
                             error=str(exc))
         except Exception:
             repo.update_job(job_id, status=JobStatus.FAILED, error=str(exc))
+    finally:
+        release_job_lock(job_id)
 
 
 @celery_app.task(name="jobs.poll_batch")
@@ -296,4 +347,7 @@ def poll_batch_task(job_id: str, batch_id: str, failures: int = 0) -> None:
 
 
 def dispatch_job(job_id: str) -> None:
+    if job_lock_held(job_id):
+        log.info("job %s already running; skip dispatch", job_id)
+        return
     run_job_task.delay(job_id)

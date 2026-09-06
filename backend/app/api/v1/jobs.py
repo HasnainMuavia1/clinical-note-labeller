@@ -14,6 +14,7 @@ from ...db.models import ApprovalStatus, JobStatus
 from ...db.repository import get_repository
 from ...errors import ProblemException
 from ...security import require_api_key
+from ...specialty.folder_hint import folder_compare
 from ...storage import allocate_job_id, job_root, save_uploads
 from ...tasks import dispatch_job
 from .schemas import AuditEntryOut, FileDetail, JobDetail, JobSummary, Page
@@ -66,6 +67,17 @@ def _file_counts(job) -> tuple[int, int]:
     return done, len(files)
 
 
+def _folder_scores(rows) -> tuple[int, int]:
+    matches = mismatches = 0
+    for row in rows:
+        result = folder_compare(getattr(row, "source_path", None), getattr(row, "specialty", None))
+        if result["label_match"] is True:
+            matches += 1
+        elif result["label_match"] is False:
+            mismatches += 1
+    return matches, mismatches
+
+
 def _summary(job) -> JobSummary:
     done, total = _file_counts(job)
     stage, progress = job.stage, job.progress
@@ -79,6 +91,8 @@ def _summary(job) -> JobSummary:
 
 
 def _skip_reason(row) -> str | None:
+    if row.status not in {"skipped", "unparsed"}:
+        return None
     trail = row.parse_trail or []
     for attempt in reversed(trail):
         if attempt.get("skipped") or (not attempt.get("ok") and attempt.get("reason")):
@@ -87,11 +101,15 @@ def _skip_reason(row) -> str | None:
 
 
 def _file_detail(row) -> FileDetail:
+    compare = folder_compare(row.source_path, row.specialty)
     return FileDetail(
         file_id=row.file_id, filename=row.filename, source_path=row.source_path,
         status=row.status, parser=row.parser, parse_trail=row.parse_trail or [],
         has_codes=row.has_codes, code_hits=row.code_hits or [],
         code_rejected=row.code_rejected or [], npis=row.npis or [], specialty=row.specialty,
+        folder_label=compare["folder_label"],
+        expected_specialty=compare["expected_specialty"],
+        label_match=compare["label_match"],
         confidence=row.confidence, method=row.method, output_path=row.output_path,
         skip_reason=_skip_reason(row))
 
@@ -133,9 +151,11 @@ def list_jobs(status: str | None = None, limit: int = Query(default=25, le=100),
 def get_job(job_id: str) -> JobDetail:
     job = _job_or_404(job_id)
     pending = len([a for a in job.approvals if a.status == ApprovalStatus.PENDING])
+    matches, mismatches = _folder_scores(_best_files(job.files or []))
     return JobDetail(**_summary(job).model_dump(),
                      original_filenames=job.original_filenames, batch_id=job.batch_id,
-                     error=job.error, pending_approvals=pending)
+                     error=job.error, pending_approvals=pending,
+                     folder_matches=matches, folder_mismatches=mismatches)
 
 
 @router.get("/jobs/{job_id}/files", response_model=Page)

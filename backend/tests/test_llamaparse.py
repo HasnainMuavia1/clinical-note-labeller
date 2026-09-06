@@ -77,6 +77,17 @@ async def test_job_error_raises(note):
         await llamaparse_text(note)
 
 
+@respx.mock
+async def test_402_stops_further_llamaparse_uploads(note):
+    upload = respx.post(f"{BASE_URL}/upload").mock(
+        return_value=httpx.Response(402, text="Payment Required"))
+    with pytest.raises(LlamaParseError, match="402"):
+        await llamaparse_text(note)
+    with pytest.raises(LlamaParseError, match="quota exhausted"):
+        await llamaparse_text(note)
+    assert upload.call_count == 1
+
+
 async def test_missing_key_raises(note, monkeypatch):
     get_settings.cache_clear()
     monkeypatch.setenv("LLAMA_CLOUD_API_KEY", "")

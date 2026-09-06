@@ -12,15 +12,18 @@ from langgraph.types import interrupt
 from ..codes.detector import detect_codes
 from ..codes.dictionaries import get_dictionaries
 from ..config import get_settings
-from ..parsing.chain import parse_document
+from ..parsing.chain import parse_document, parse_via_llamaparse, parse_via_sandbox
 from ..specialty.classifier import ClassificationRequest, classify
 from ..specialty.npi import resolve_specialty_from_npis
+from ..specialty.folder_hint import with_folder_compare
 from ..specialty.taxonomy import UNCLASSIFIED, folder_name, normalize_specialty
 from ..runtime.capacity import resolve_capacity
-from ..workspace.archive import extract_archive
+from ..workspace.archive import extract_archive, is_note_file
 from ..workspace.filetools import FileOp, GuardedFileTools
 from ..workspace.manifest import write_labels_csv, write_manifest, write_output_zip
+from ..workspace.parse_cache import save as save_parse_cache
 from .approvals import approval_payload
+from .hydrate import hydrate_files, is_retryable
 from .pool import map_files, skipped
 from .state import JobState
 
@@ -75,7 +78,7 @@ def _tools(state: JobState) -> GuardedFileTools:
 
 
 def _file_record(path: Path, source_path: str) -> dict:
-    return {
+    return with_folder_compare({
         "file_id": str(uuid.uuid4()),
         "path": str(path),
         "filename": path.name,
@@ -94,7 +97,7 @@ def _file_record(path: Path, source_path: str) -> dict:
         "confidence": 0.0,
         "method": None,
         "output_path": None,
-    }
+    })
 
 
 async def intake_node(state: JobState) -> dict:
@@ -109,6 +112,14 @@ async def intake_node(state: JobState) -> dict:
         if not path.is_file():
             continue
         try:
+            if not is_note_file(path.name) and path.suffix.lower() != ".zip":
+                files.append(skipped({
+                    "file_id": str(uuid.uuid4()),
+                    "path": str(path),
+                    "filename": path.name,
+                    "source_path": path.name,
+                }, "intake", RuntimeError("not a clinical note")))
+                continue
             files.append(_file_record(path, path.name))
         except Exception as exc:
             log.warning("skipping %s at intake: %s", path.name, exc)
@@ -172,23 +183,60 @@ async def unpack_node(state: JobState) -> dict:
                     "filename": entry.path.name,
                     "source_path": f"{path.name}!/{entry.source_path}",
                 }, "unpack", exc))
-    return {"files": result, "stage": "unpack"}
+    return {"files": hydrate_files(state.get("job_id"), result, state.get("root") or "."),
+            "stage": "unpack"}
 
 
 async def parse_node(state: JobState) -> dict:
+    root = Path(state.get("root") or ".")
+    pending = hydrate_files(state.get("job_id"), state.get("files", []), root)
+    # New / failed notes first so the job counter moves instead of replaying old successes.
+    pending.sort(key=lambda row: (1 if row.get("_resume_parser") or row.get("ok") else 0,
+                                  row.get("filename") or ""))
+
     async def work(record: dict) -> dict:
         if record.get("ok"):
             return record
-        parsed = await parse_document(Path(record["path"]))
-        return {**record, "text": parsed.text, "parser": parsed.parser, "ok": parsed.ok,
-                "parse_trail": [{"parser": a.parser, "ok": a.ok, "reason": a.reason}
-                                for a in parsed.trail]}
+        last = record
+        for attempt in range(1, 4):
+            parsed = await _parse_once(record)
+            last = {**record, "text": parsed.text, "parser": parsed.parser, "ok": parsed.ok,
+                    "parse_trail": [{"parser": a.parser, "ok": a.ok, "reason": a.reason}
+                                    for a in parsed.trail]}
+            if parsed.ok:
+                try:
+                    save_parse_cache(root, record.get("sha256"), last)
+                except Exception:
+                    log.warning("parse cache write failed for %s", record.get("filename"))
+                return last
+            if not is_retryable(last):
+                return last
+            await asyncio.sleep(0.3 * attempt)
+        return last
 
+    plan = resolve_capacity()
     files = await map_files(
-        state.get("files", []), work, stage="parse",
+        pending, work, stage="parse",
         concurrency=_stage_concurrency("parse"),
+        worker_groups=plan.parse_workers,
+        threads_per_worker=plan.parse_threads,
     )
     return {"files": files, "stage": "parse"}
+
+
+async def _parse_once(record: dict):
+    path = Path(record["path"])
+    hop = record.get("_resume_parser")
+    if hop == "pypdf" or hop in {"text", "python-docx", "sandbox"}:
+        parsed = await parse_via_sandbox(path)
+        return parsed if parsed.ok else await parse_document(path)
+    if hop == "llamaparse":
+        parsed = await parse_via_llamaparse(path)
+        return parsed if parsed.ok else await parse_document(path)
+    if hop == "ocr":
+        parsed = await parse_via_sandbox(path, ocr=True)
+        return parsed if parsed.ok else await parse_document(path)
+    return await parse_document(path)
 
 
 async def detect_codes_node(state: JobState) -> dict:
@@ -204,6 +252,10 @@ async def detect_codes_node(state: JobState) -> dict:
 
     async def work(record: dict) -> dict:
         if not record.get("ok"):
+            return record
+        if record.get("_codes_done"):
+            return record
+        if record.get("_already_parsed") and not (record.get("text") or "").strip():
             return record
         result = await asyncio.to_thread(detect_codes, record.get("text", ""), dicts, threshold)
         return {**record,
@@ -225,8 +277,8 @@ async def resolve_npi_node(state: JobState) -> dict:
             return record
         resolved = await resolve_specialty_from_npis(record["npis"])
         if resolved and resolved.specialty:
-            return {**record, "specialty": resolved.specialty,
-                    "confidence": 1.0, "method": "npi"}
+            return with_folder_compare({**record, "specialty": resolved.specialty,
+                                        "confidence": 1.0, "method": "npi"})
         return record
 
     files = await map_files(
@@ -237,7 +289,8 @@ async def resolve_npi_node(state: JobState) -> dict:
 
 
 async def classify_node(state: JobState) -> dict:
-    pending = [f for f in state.get("files", []) if f.get("ok") and not f.get("specialty")]
+    pending = [f for f in state.get("files", [])
+               if f.get("ok") and not f.get("specialty") and (f.get("text") or "").strip()]
     if not pending:
         return {"files": state.get("files", []), "stage": "classify"}
 
@@ -277,8 +330,10 @@ async def classify_node(state: JobState) -> dict:
             files.append(record)
             continue
         try:
-            files.append({**record, "specialty": normalize_specialty(label.specialty),
-                          "confidence": label.confidence, "method": label.method})
+            files.append(with_folder_compare({
+                **record, "specialty": normalize_specialty(label.specialty),
+                "confidence": label.confidence, "method": label.method,
+            }))
         except Exception as exc:
             files.append(skipped(record, "classify", exc))
     return {"files": files, "stage": "classify", "batch_id": batch_id}
@@ -313,10 +368,12 @@ async def plan_placement_node(state: JobState) -> dict:
     for record in files:
         try:
             if record.get("file_id") in overrides:
-                record = {**record, "specialty": normalize_specialty(overrides[record["file_id"]]),
-                          "confidence": 1.0, "method": "human"}
+                record = with_folder_compare({
+                    **record, "specialty": normalize_specialty(overrides[record["file_id"]]),
+                    "confidence": 1.0, "method": "human",
+                })
             elif needs_review(record):
-                record = {**record, "specialty": UNCLASSIFIED}
+                record = with_folder_compare({**record, "specialty": UNCLASSIFIED})
         except Exception as exc:
             record = skipped(record, "plan_placement", exc)
         resolved.append(record)
@@ -417,6 +474,10 @@ async def manifest_node(state: JobState) -> dict:
             "npis": record.get("npis", []),
             "output_path": record.get("output_path") or "",
             "skip_reason": record.get("skip_reason") or "",
+            **with_folder_compare({
+                "source_path": record.get("source_path", ""),
+                "specialty": record.get("specialty") or UNCLASSIFIED,
+            }),
         })
     try:
         write_manifest(root / "output" / "manifest.jsonl", records)

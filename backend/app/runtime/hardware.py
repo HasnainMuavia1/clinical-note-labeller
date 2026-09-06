@@ -90,6 +90,15 @@ def _nvidia_device_nodes() -> list[Path]:
     return sorted(Path("/dev").glob("nvidia[0-9]*"))
 
 
+def _nvidia_smi_query() -> str | None:
+    """Linux `nvidia-smi` or Windows `nvidia-smi.exe` — same CSV query."""
+    for exe in ("nvidia-smi", "nvidia-smi.exe"):
+        out = _run([exe, "--query-gpu=name", "--format=csv,noheader"])
+        if out and out.strip():
+            return out
+    return None
+
+
 def _apple_metal_available() -> bool:
     if sys.platform != "darwin":
         return False
@@ -118,7 +127,7 @@ def detect_gpus() -> tuple[GpuDevice, ...]:
         count = int(explicit)
         return tuple(GpuDevice(i, f"gpu-{i}", "cuda") for i in range(count))
 
-    smi = _run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"])
+    smi = _nvidia_smi_query()
     if smi:
         names = [line.strip() for line in smi.splitlines() if line.strip()]
         visible = _visible_device_count("CUDA_VISIBLE_DEVICES", "NVIDIA_VISIBLE_DEVICES")

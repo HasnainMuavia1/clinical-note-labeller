@@ -5,6 +5,26 @@ from app.agent.pool import map_files
 from app.agent.progress import file_progress_listener
 
 
+async def test_map_files_runs_three_worker_groups_of_four_threads():
+    inflight = 0
+    peak = 0
+
+    async def worker(record):
+        nonlocal inflight, peak
+        inflight += 1
+        peak = max(peak, inflight)
+        await asyncio.sleep(0.04)
+        inflight -= 1
+        return record
+
+    out = await map_files(
+        [{"file_id": str(i)} for i in range(24)],
+        worker, stage="parse", worker_groups=3, threads_per_worker=4,
+    )
+    assert len(out) == 24
+    assert peak == 12
+
+
 async def test_map_files_runs_workers_in_parallel():
     started = []
 

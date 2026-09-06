@@ -32,16 +32,23 @@ async def map_files(
     worker: Worker,
     *,
     stage: str,
-    concurrency: int,
+    concurrency: int | None = None,
+    worker_groups: int = 1,
+    threads_per_worker: int | None = None,
 ) -> list[dict]:
     """Run one async worker per file, capped by a semaphore, preserving input order.
 
-    A worker exception skips that file and does not cancel the rest.
+    `worker_groups` × `threads_per_worker` is the 3-workers-of-4-threads shape:
+    total in-flight files = groups × threads. A worker exception skips that file
+    and does not cancel the rest.
     """
     if not records:
         return []
 
-    limit = max(1, concurrency)
+    if worker_groups > 1 and threads_per_worker:
+        limit = max(1, worker_groups * max(1, threads_per_worker))
+    else:
+        limit = max(1, concurrency or 1)
     semaphore = asyncio.Semaphore(limit)
     done = 0
     lock = asyncio.Lock()

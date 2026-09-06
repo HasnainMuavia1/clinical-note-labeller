@@ -175,6 +175,37 @@ def test_get_unknown_job_returns_problem_json(api):
     assert r.headers["content-type"].startswith("application/problem+json")
 
 
+def test_skip_reason_is_blank_when_a_later_parser_succeeded(api):
+    client, repo, _ = api
+    repo.create_job("j1", "test-key", [], None)
+    repo.upsert_file(
+        "j1", "f1", filename="scan.pdf", status="parsed", parser="llamaparse",
+        parse_trail=[
+            {"parser": "pypdf", "ok": False, "reason": "no extractable text"},
+            {"parser": "llamaparse", "ok": True, "reason": None},
+        ],
+        specialty="General Surgery",
+    )
+    body = client.get("/api/v1/jobs/j1/files/f1", headers=AUTH).json()
+    assert body["status"] == "parsed"
+    assert body["skip_reason"] is None
+
+
+def test_skip_reason_is_kept_for_unparsed_files(api):
+    client, repo, _ = api
+    repo.create_job("j1", "test-key", [], None)
+    repo.upsert_file(
+        "j1", "f1", filename="scan.pdf", status="unparsed", parser="none",
+        parse_trail=[
+            {"parser": "pypdf", "ok": False, "reason": "no extractable text"},
+            {"parser": "ocr", "ok": False,
+             "reason": "RemoteProtocolError: Server disconnected without sending a response."},
+        ],
+    )
+    body = client.get("/api/v1/jobs/j1/files/f1", headers=AUTH).json()
+    assert "RemoteProtocolError" in (body["skip_reason"] or "")
+
+
 def test_file_detail_exposes_code_evidence(api):
     client, repo, _ = api
     repo.create_job("j1", "test-key", [], None)
@@ -184,6 +215,37 @@ def test_file_detail_exposes_code_evidence(api):
     body = client.get("/api/v1/jobs/j1/files/f1", headers=AUTH).json()
     assert body["code_hits"][0]["code"] == "99213"
     assert body["specialty"] == "Cardiology"
+
+
+def test_file_detail_compares_assigned_label_to_folder_specialty(api):
+    client, repo, _ = api
+    repo.create_job("j1", "test-key", ["notes.zip"], None)
+    repo.upsert_file(
+        "j1", "f1", filename="a.pdf",
+        source_path="notes.zip!/Star Orthopedics/Notes/a.pdf",
+        status="filed", specialty="Orthopedic Surgery",
+    )
+    repo.upsert_file(
+        "j1", "f2", filename="b.pdf",
+        source_path="notes.zip!/Cardiology/b.pdf",
+        status="filed", specialty="Dermatology",
+    )
+    repo.upsert_file(
+        "j1", "f3", filename="c.pdf",
+        source_path="notes.zip!/ahmed/c.pdf",
+        status="filed", specialty="Family Medicine",
+    )
+    items = {row["filename"]: row
+             for row in client.get("/api/v1/jobs/j1/files", headers=AUTH).json()["items"]}
+    assert items["a.pdf"]["folder_label"] == "Star Orthopedics"
+    assert items["a.pdf"]["expected_specialty"] == "Orthopedic Surgery"
+    assert items["a.pdf"]["label_match"] is True
+    assert items["b.pdf"]["label_match"] is False
+    assert items["b.pdf"]["expected_specialty"] == "Cardiology"
+    assert items["c.pdf"]["label_match"] is None
+    job = client.get("/api/v1/jobs/j1", headers=AUTH).json()
+    assert job["folder_matches"] == 1
+    assert job["folder_mismatches"] == 1
 
 
 def test_audit_endpoint_lists_job_events(api):

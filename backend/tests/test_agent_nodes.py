@@ -4,6 +4,8 @@ import zipfile
 import pytest
 
 from app.agent.nodes import (
+    ClassificationLike,
+    classify_node,
     detect_codes_node,
     execute_ops_node,
     intake_node,
@@ -60,6 +62,55 @@ async def test_unpack_expands_a_zip_and_records_source_path(tmp_path):
     assert "bundle.zip" not in names
     entry = next(f for f in out["files"] if f["filename"] == "a.txt")
     assert entry["source_path"] == "bundle.zip!/cardio/a.txt"
+    assert entry["folder_label"] == "cardio"
+    assert entry["expected_specialty"] == "Cardiology"
+    assert entry.get("label_match") is None
+
+
+async def test_unpack_keeps_pdfs_inside_specialty_named_folders(tmp_path):
+    root = tmp_path / "job-nested"
+    (root / "input").mkdir(parents=True)
+    with zipfile.ZipFile(root / "input" / "clinical note.zip", "w") as zf:
+        zf.writestr("clinical note/new notes/Star Orthopedics/Notes/188.pdf", b"%PDF-1.4")
+        zf.writestr("clinical note/FLOYD SURGERY/IMAGING 0154.pdf", b"%PDF-1.4")
+        zf.writestr("clinical note/old notes/Ashli gobert/1.pdf", b"%PDF-1.4")
+    state = await intake_node({"job_id": "job-nested", "root": str(root)})
+    out = await unpack_node({**state, "job_id": "job-nested", "root": str(root)})
+    by_name = {f["filename"]: f for f in out["files"]}
+    assert set(by_name) >= {"188.pdf", "IMAGING 0154.pdf", "1.pdf"}
+    assert by_name["188.pdf"]["expected_specialty"] == "Orthopedic Surgery"
+    assert by_name["188.pdf"]["folder_label"] == "Star Orthopedics"
+    assert by_name["IMAGING 0154.pdf"]["expected_specialty"] == "General Surgery"
+    assert by_name["1.pdf"]["expected_specialty"] is None
+
+
+async def test_classify_compares_assigned_label_to_folder_specialty(tmp_path, monkeypatch):
+    async def fake_classify(requests, path):
+        by_id = {req.file_id: req for req in requests}
+        results = []
+        for file_id in by_id:
+            specialty = {"f1": "Orthopedic Surgery", "f2": "Dermatology",
+                         "f3": "Family Medicine"}[file_id]
+            results.append(ClassificationLike(file_id, specialty, 0.9, method="llm_sync"))
+        return results, None
+
+    monkeypatch.setattr("app.agent.nodes.classify", fake_classify)
+    files = [
+        {"file_id": "f1", "ok": True, "text": "knee",
+         "source_path": "bundle.zip!/Star Orthopedics/Notes/a.pdf", "specialty": None},
+        {"file_id": "f2", "ok": True, "text": "rash",
+         "source_path": "bundle.zip!/Cardiology/b.pdf", "specialty": None},
+        {"file_id": "f3", "ok": True, "text": "note",
+         "source_path": "bundle.zip!/ahmed/c.pdf", "specialty": None},
+    ]
+    out = await classify_node({"files": files, "root": str(tmp_path), "job_id": "job-cmp"})
+    by_id = {f["file_id"]: f for f in out["files"]}
+    assert by_id["f1"]["label_match"] is True
+    assert by_id["f1"]["expected_specialty"] == "Orthopedic Surgery"
+    assert by_id["f2"]["label_match"] is False
+    assert by_id["f2"]["expected_specialty"] == "Cardiology"
+    assert by_id["f3"]["label_match"] is None
+    assert by_id["f3"]["expected_specialty"] is None
 
 
 async def test_parse_node_keeps_several_files_in_flight(workspace, monkeypatch):
@@ -98,6 +149,14 @@ async def test_detect_codes_splits_coded_and_uncoded(workspace):
     by_id = {f["file_id"]: f for f in out["files"]}
     assert by_id["f1"]["has_codes"] is True
     assert by_id["f2"]["has_codes"] is False
+
+
+async def test_detect_skips_already_parsed_ocr_without_text(workspace):
+    out = await detect_codes_node({"files": [{
+        "file_id": "scan", "text": "", "ok": True, "_already_parsed": True,
+    }], "root": str(workspace)})
+    assert "has_codes" not in out["files"][0] or out["files"][0].get("has_codes") is not False
+    assert out["files"][0]["_already_parsed"] is True
 
 
 async def test_plan_placement_builds_branch_and_specialty_paths(workspace):

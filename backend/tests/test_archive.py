@@ -18,6 +18,21 @@ def test_extracts_flat_entries(tmp_path):
     assert (dest / "note1.txt").read_text() == "hello"
 
 
+def test_skips_junk_and_keeps_clinical_notes(tmp_path):
+    archive = make_zip(tmp_path / "mix.zip", {
+        "Cardiology/note.pdf": b"%PDF",
+        "Cardiology/.DS_Store": b"mac",
+        "tools/nitro_pro14.exe": b"MZ",
+        "old notes/scan.tif": b"II",
+        "sheet.xls": b"\xd0\xcf",
+    })
+    extracted = extract_archive(archive, tmp_path / "out")
+    names = {e.path.name for e in extracted}
+    assert names == {"note.pdf", "scan.tif"}
+    skipped = {row.filename for row in extracted.skipped}
+    assert skipped >= {".DS_Store", "nitro_pro14.exe", "sheet.xls"}
+
+
 def test_preserves_source_path_for_nested_folders(tmp_path):
     archive = make_zip(tmp_path / "a.zip", {"cardio/note1.txt": "x", "derm/sub/note2.txt": "y"})
     entries = extract_archive(archive, tmp_path / "out")

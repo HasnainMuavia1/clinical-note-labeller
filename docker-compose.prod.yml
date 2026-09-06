@@ -50,14 +50,16 @@ services:
     restart: unless-stopped
     environment:
       OCR_WORKERS: ${OCR_WORKERS:-0}
-      SANDBOX_WORKERS: ${SANDBOX_WORKERS:-2}
+      OCR_SLOTS: ${OCR_SLOTS:-0}
+      SANDBOX_WORKERS: ${SANDBOX_WORKERS:-1}
+      OMP_NUM_THREADS: 1
     networks: [sandboxnet]
     read_only: true
-    tmpfs: ["/tmp:size=2g"]
+    tmpfs: ["/tmp:size=4g"]
     security_opt: ["no-new-privileges:true"]
     cap_drop: ["ALL"]
-    pids_limit: 256
-    mem_limit: 2g
+    pids_limit: 2048
+    mem_limit: 4g
 
   api:
     image: ghcr.io/hasnainmuavia1/clinical-note-labeller/backend:${IMAGE_TAG:-latest}

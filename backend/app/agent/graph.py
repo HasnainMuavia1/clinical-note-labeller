@@ -66,6 +66,13 @@ def build_graph(checkpointer):
 async def run_job(job_id: str, root: Path, checkpointer) -> JobState:
     graph = build_graph(checkpointer)
     config = {"configurable": {"thread_id": job_id}}
+    try:
+        snapshot = await graph.aget_state(config)
+    except Exception:
+        snapshot = None
+    if snapshot and getattr(snapshot, "values", None) and getattr(snapshot, "next", None):
+        log.info("continuing job %s from %s", job_id, snapshot.next)
+        return await graph.ainvoke(None, config)
     return await graph.ainvoke({"job_id": job_id, "root": str(root)}, config)
 
 

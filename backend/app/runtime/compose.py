@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .hardware import _nvidia_device_nodes, _run
+from .hardware import _nvidia_device_nodes, _nvidia_smi_query
 
 
 def host_can_pass_nvidia() -> bool:
     """True when this host can attach an NVIDIA GPU into a Linux container."""
-    smi = _run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"])
+    smi = _nvidia_smi_query()
     if smi and smi.strip():
         return True
     return bool(_nvidia_device_nodes())

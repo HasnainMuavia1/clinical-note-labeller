@@ -194,7 +194,7 @@ async def test_gpu_does_not_ocr_plain_text_first(tmp_path, monkeypatch):
 @respx.mock
 async def test_ocr_request_sends_planned_worker_count(note, monkeypatch):
     monkeypatch.setattr(chain_module, "ocr_first", lambda: True)
-    monkeypatch.setattr("app.parsing.sandbox_client.resolve_ocr_workers", lambda: 6)
+    monkeypatch.setattr("app.parsing.sandbox_client._ocr_page_workers", lambda: 4)
     seen = {}
 
     def sandbox_response(request):
@@ -208,7 +208,7 @@ async def test_ocr_request_sends_planned_worker_count(note, monkeypatch):
 
     result = await parse_document(note)
     assert result.ok
-    assert "workers=6" in seen["url"]
+    assert "workers=4" in seen["url"]
     assert "ocr=true" in seen["url"]
 
 

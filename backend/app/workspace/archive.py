@@ -10,6 +10,18 @@ from .paths import PathEscapeError, resolve_within
 log = logging.getLogger(__name__)
 
 ARCHIVE_SUFFIXES = {".zip"}
+NOTE_SUFFIXES = {
+    ".pdf", ".docx", ".doc", ".txt", ".md", ".rtf",
+    ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp", ".bmp",
+}
+JUNK_NAMES = {".ds_store", "thumbs.db", "desktop.ini", ".localized"}
+
+
+def is_note_file(name: str) -> bool:
+    path = Path(name)
+    if path.name.lower() in JUNK_NAMES:
+        return False
+    return path.suffix.lower() in NOTE_SUFFIXES
 
 
 class ArchiveError(Exception):
@@ -85,6 +97,10 @@ def _extract(archive: Path, dest: Path, prefix: str, depth: int, max_depth: int,
             if info.is_dir():
                 continue
             source_path = f"{prefix}{info.filename}"
+            leaf = Path(info.filename).name
+            if Path(info.filename).suffix.lower() not in ARCHIVE_SUFFIXES and not is_note_file(leaf):
+                _note_skip(skipped, source_path, f"{leaf}: not a clinical note")
+                continue
             try:
                 target = resolve_within(dest, info.filename)
             except PathEscapeError as exc:

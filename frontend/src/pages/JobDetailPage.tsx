@@ -37,6 +37,11 @@ export default function JobDetailPage() {
     <section className="job-record">
       <AgentRun jobId={jobId} showRecordLink={false} />
       {job.error && <p className="error">{job.error}</p>}
+      {(job.folder_matches || job.folder_mismatches) ? (
+        <p>
+          Folder labels: {job.folder_matches ?? 0} match, {job.folder_mismatches ?? 0} differ
+        </p>
+      ) : null}
 
       <table>
         <thead>
@@ -44,6 +49,8 @@ export default function JobDetailPage() {
             <th>File</th>
             <th>Codes</th>
             <th>Specialty</th>
+            <th>Folder</th>
+            <th>Match</th>
             <th>Method</th>
             <th>Confidence</th>
             <th>Skip reason</th>
@@ -63,6 +70,10 @@ export default function JobDetailPage() {
                       : 'without-codes'}
               </td>
               <td>{file.specialty ?? '—'}</td>
+              <td>{file.expected_specialty ?? file.folder_label ?? '—'}</td>
+              <td>
+                {file.label_match === true ? 'yes' : file.label_match === false ? 'no' : '—'}
+              </td>
               <td>{file.method ?? '—'}</td>
               <td>{file.confidence.toFixed(2)}</td>
               <td>{file.skip_reason || (file.status === 'skipped' ? file.parse_trail.at(-1)?.reason : null) || '—'}</td>

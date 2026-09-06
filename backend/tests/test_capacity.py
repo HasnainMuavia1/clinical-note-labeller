@@ -21,6 +21,82 @@ def test_high_cpu_box_raises_file_and_celery_workers():
     assert plan.file_concurrency <= 64
     assert plan.celery_concurrency <= 16
     assert plan.llm_sync_concurrency >= 8
+    assert plan.ocr_inflight >= 6
+    assert 2 <= plan.ocr_page_workers <= 4
+
+
+def test_this_mac_plan_is_three_parse_workers_of_four_threads():
+    plan = plan_capacity(HardwareProfile(cpu_count=10, memory_bytes=8 * 1024**3, gpus=()))
+    assert plan.parse_workers == 3
+    assert plan.parse_threads == 4
+    assert plan.ocr_inflight == 5
+    assert plan.parse_workers * plan.parse_threads == 12
+
+
+def test_apple_metal_does_not_use_cuda_ocr_sizing():
+    metal = (GpuDevice(index=0, name="Apple Metal", backend="mps"),)
+    plan = plan_capacity(HardwareProfile(cpu_count=10, memory_bytes=16 * 1024**3, gpus=metal))
+    cuda = plan_capacity(HardwareProfile(
+        cpu_count=10, memory_bytes=16 * 1024**3,
+        gpus=(GpuDevice(index=0, name="RTX", backend="cuda"),),
+    ))
+    assert plan.ocr_inflight >= 4
+    assert cuda.ocr_page_workers >= plan.ocr_page_workers
+    assert cuda.parse_concurrency >= plan.parse_concurrency
+
+
+def _cuda_gpus(count: int) -> tuple[GpuDevice, ...]:
+    return tuple(GpuDevice(i, f"RTX-{i}", "cuda") for i in range(count))
+
+
+def test_more_cuda_gpus_grow_workers_threads_and_batch():
+    hw = dict(cpu_count=16, memory_bytes=64 * 1024**3)
+    one = plan_capacity(HardwareProfile(**hw, gpus=_cuda_gpus(1)))
+    two = plan_capacity(HardwareProfile(**hw, gpus=_cuda_gpus(2)))
+    four = plan_capacity(HardwareProfile(**hw, gpus=_cuda_gpus(4)))
+    cpu = plan_capacity(HardwareProfile(**hw, gpus=()))
+
+    assert one.parse_workers >= 2
+    assert one.parse_threads >= 4
+    assert one.gpu_batch_size >= 16
+    assert two.parse_threads > one.parse_threads or two.parse_workers > one.parse_workers
+    assert two.gpu_batch_size > one.gpu_batch_size
+    assert four.gpu_batch_size > two.gpu_batch_size
+    assert four.parse_workers * four.parse_threads >= two.parse_workers * two.parse_threads
+    assert four.ocr_inflight >= two.ocr_inflight >= one.ocr_inflight
+    assert one.parse_workers * one.parse_threads > cpu.parse_workers * cpu.parse_threads or (
+        one.ocr_inflight > cpu.ocr_inflight
+    )
+
+
+def test_windows_nvidia_smi_exe_is_detected_as_cuda(monkeypatch):
+    monkeypatch.delenv("GPU_COUNT", raising=False)
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("NVIDIA_VISIBLE_DEVICES", raising=False)
+
+    def fake_run(cmd, timeout=2.0):
+        if cmd and cmd[0] == "nvidia-smi.exe":
+            return "NVIDIA GeForce RTX 4090\n"
+        return None
+
+    monkeypatch.setattr("app.runtime.hardware._run", fake_run)
+    monkeypatch.setattr("app.runtime.hardware._nvidia_device_nodes", lambda: [])
+    gpus = detect_gpus()
+    assert len(gpus) == 1
+    assert gpus[0].backend == "cuda"
+    assert "4090" in gpus[0].name
+
+
+def test_ocr_first_is_on_when_cuda_is_visible(monkeypatch):
+    from app.parsing.chain import ocr_first
+
+    monkeypatch.setattr(
+        "app.runtime.hardware.detect_gpus",
+        lambda: (GpuDevice(0, "RTX 4090", "cuda"),),
+    )
+    assert ocr_first() is True
+    monkeypatch.setattr("app.runtime.hardware.detect_gpus", lambda: ())
+    assert ocr_first() is False
 
 
 def test_gpu_raises_batch_size_and_parse_concurrency():

@@ -153,6 +153,27 @@ def test_a_batch_interrupt_parks_the_job_and_schedules_a_poll(repo, monkeypatch)
     assert repo.list_approvals("j1") == []
 
 
+def test_duplicate_job_run_is_ignored(repo, monkeypatch):
+    monkeypatch.setattr(tasks_module, "try_acquire_job_lock", lambda _job_id: False)
+    listened = []
+    monkeypatch.setattr(tasks_module, "_listen", lambda _job_id: listened.append("listen") or (1, 2))
+
+    tasks_module.run_job_task("j1")
+
+    assert listened == []
+    assert repo.get_job("j1").status == JobStatus.PENDING
+
+
+def test_dispatch_skips_when_the_job_is_already_locked(monkeypatch):
+    delayed = []
+    monkeypatch.setattr(tasks_module, "job_lock_held", lambda _job_id: True)
+    monkeypatch.setattr(tasks_module.run_job_task, "delay", lambda job_id: delayed.append(job_id))
+
+    tasks_module.dispatch_job("j1")
+
+    assert delayed == []
+
+
 def test_checkpoint_survives_an_audit_failure(repo, monkeypatch):
     def boom(*_args, **_kwargs):
         raise RuntimeError("audit down")

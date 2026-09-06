@@ -29,6 +29,9 @@ class FileDetail(BaseModel):
     code_rejected: list[dict] = Field(default_factory=list)
     npis: list[str] = Field(default_factory=list)
     specialty: str | None
+    folder_label: str | None = None
+    expected_specialty: str | None = None
+    label_match: bool | None = None
     confidence: float
     method: str | None
     output_path: str | None
@@ -40,6 +43,8 @@ class JobDetail(JobSummary):
     batch_id: str | None = None
     error: str | None = None
     pending_approvals: int = 0
+    folder_matches: int = 0
+    folder_mismatches: int = 0
 
 
 class ApprovalOut(BaseModel):

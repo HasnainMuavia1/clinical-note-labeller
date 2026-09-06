@@ -21,6 +21,8 @@ export interface JobDetail extends JobSummary {
   batch_id: string | null;
   error: string | null;
   pending_approvals: number;
+  folder_matches?: number;
+  folder_mismatches?: number;
 }
 
 export interface CodeHit {
@@ -50,6 +52,9 @@ export interface FileDetail {
   code_rejected: CodeHit[];
   npis: string[];
   specialty: string | null;
+  folder_label?: string | null;
+  expected_specialty?: string | null;
+  label_match?: boolean | null;
   confidence: number;
   method: string | null;
   output_path: string | null;

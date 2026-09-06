@@ -14,7 +14,30 @@ from charset_normalizer import from_bytes
 from fastapi import FastAPI, File, Query, UploadFile
 
 MAX_BYTES = 512 * 1024 * 1024
-TEXT_SUFFIXES = {".txt", ".md", ".rtf", ".csv", ".json", ".log", ".text", ""}
+TEXT_SUFFIXES = {".txt", ".md", ".rtf", ".csv", ".json", ".text"}
+JUNK_NAMES = {".ds_store", "thumbs.db", "desktop.ini", ".localized"}
+_OCR_SLOTS: asyncio.Semaphore | None = None
+
+
+def _page_worker_cap() -> int:
+    raw = os.environ.get("OCR_WORKERS", "").strip()
+    if raw.isdigit() and int(raw) > 0:
+        return int(raw)
+    return max(2, min(4, (os.cpu_count() or 2) // 2 or 2))
+
+
+def _ocr_slot_limit() -> int:
+    raw = os.environ.get("OCR_SLOTS", "").strip()
+    if raw.isdigit() and int(raw) > 0:
+        return int(raw)
+    return max(2, min(8, os.cpu_count() or 2))
+
+
+def _ocr_slots() -> asyncio.Semaphore:
+    global _OCR_SLOTS
+    if _OCR_SLOTS is None:
+        _OCR_SLOTS = asyncio.Semaphore(_ocr_slot_limit())
+    return _OCR_SLOTS
 
 
 def _parse_pdf(data: bytes) -> tuple[str, int]:
@@ -53,6 +76,13 @@ def _tesseract_version() -> str | None:
     return line[0].strip() if line else None
 
 
+def _ocr_dpi() -> int:
+    raw = os.environ.get("OCR_DPI", "150").strip()
+    if raw.isdigit() and int(raw) > 0:
+        return int(raw)
+    return 150
+
+
 def _ocr_workers() -> int:
     raw = os.environ.get("OCR_WORKERS", "").strip()
     if raw.isdigit() and int(raw) > 0:
@@ -83,7 +113,7 @@ def _parse_ocr(data: bytes, suffix: str, workers: int | None = None) -> tuple[st
         if suffix.lower() == ".pdf":
             if not shutil.which("pdftoppm"):
                 raise RuntimeError("pdftoppm is not installed in this image")
-            subprocess.run(["pdftoppm", "-r", "200", "-png", str(src), f"{tmp}/page"],
+            subprocess.run(["pdftoppm", "-r", str(_ocr_dpi()), "-png", str(src), f"{tmp}/page"],
                            check=True, timeout=600, capture_output=True)
             images = sorted(Path(tmp).glob("page*.png"))
             if not images:
@@ -91,7 +121,7 @@ def _parse_ocr(data: bytes, suffix: str, workers: int | None = None) -> tuple[st
         else:
             images = [src]
         planned = workers if workers and workers > 0 else _ocr_workers()
-        workers = min(len(images), planned) if images else 1
+        workers = min(len(images), planned, _page_worker_cap()) if images else 1
         if workers <= 1:
             chunks = [_ocr_page(image) for image in images]
         else:
@@ -119,10 +149,15 @@ def create_app() -> FastAPI:
             return {"text": "", "pages": 0, "parser": "none", "ok": False,
                     "reason": "file exceeds size limit"}
 
-        suffix = Path(file.filename or "").suffix.lower()
+        filename = Path(file.filename or "").name
+        suffix = Path(filename).suffix.lower()
+        if filename.lower() in JUNK_NAMES or (not suffix and filename.lower().startswith(".")):
+            return {"text": "", "pages": 0, "parser": "none", "ok": False,
+                    "reason": f"unsupported extension {suffix!r}"}
         try:
             if ocr:
-                text, pages = await asyncio.to_thread(_parse_ocr, data, suffix, workers)
+                async with _ocr_slots():
+                    text, pages = await asyncio.to_thread(_parse_ocr, data, suffix, workers)
                 parser = "ocr"
             elif suffix == ".pdf":
                 text, pages = await asyncio.to_thread(_parse_pdf, data)

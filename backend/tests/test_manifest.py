@@ -27,6 +27,9 @@ def test_labels_csv_has_the_expected_header_and_row(tmp_path):
     assert rows[0]["specialty"] == "Cardiology"
     assert rows[0]["codes_branch"] == "with-codes"
     assert rows[0]["code_count"] == "1"
+    assert rows[0]["folder_label"] == "cardio"
+    assert rows[0]["expected_specialty"] == "Cardiology"
+    assert rows[0]["label_match"] == "True"
 
 
 def test_write_output_zip_packs_the_labelled_tree(tmp_path):

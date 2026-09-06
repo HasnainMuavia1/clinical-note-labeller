@@ -27,11 +27,17 @@ RETRY_STATUSES = {429, 500, 502, 503, 504}
 MAX_RETRIES = 6
 
 _limiter: SlidingWindowLimiter | None = None
+_quota_exhausted = False
 
 
 def reset_upload_limiter() -> None:
-    global _limiter
+    global _limiter, _quota_exhausted
     _limiter = None
+    _quota_exhausted = False
+
+
+def llama_quota_exhausted() -> bool:
+    return _quota_exhausted
 
 
 def get_upload_limiter() -> SlidingWindowLimiter:
@@ -72,9 +78,12 @@ class LlamaParseError(RuntimeError):
 
 async def llamaparse_text(path: Path) -> str:
     """Upload a document, wait for the job, and return its extracted text."""
+    global _quota_exhausted
     settings = get_settings()
     if not settings.llama_cloud_api_key:
         raise LlamaParseError("LLAMA_CLOUD_API_KEY is not configured")
+    if _quota_exhausted:
+        raise LlamaParseError("LlamaParse quota exhausted; skipping remaining uploads")
 
     headers = {"Authorization": f"Bearer {settings.llama_cloud_api_key}",
                "accept": "application/json"}
@@ -85,6 +94,9 @@ async def llamaparse_text(path: Path) -> str:
             client, "POST", f"{BASE_URL}/upload",
             limit=True, files={"file": (path.name, payload)},
         )
+        if response.status_code in {401, 402, 403}:
+            _quota_exhausted = True
+            raise LlamaParseError(f"upload failed: HTTP {response.status_code} {response.text[:200]}")
         if response.status_code >= 400:
             raise LlamaParseError(f"upload failed: HTTP {response.status_code} {response.text[:200]}")
 
