@@ -322,6 +322,21 @@ def resume_job_task(job_id: str, resume_value) -> None:
 def poll_batch_task(job_id: str, batch_id: str, failures: int = 0) -> None:
     from .specialty.classifier import fetch_batch_results, poll_batch
 
+    repo = get_repository()
+    job = repo.get_job(job_id)
+    if job is None:
+        return
+    # A late batch result must not resume into a low-confidence approval interrupt
+    # (that used to inject a list and mass-skip every file).
+    if job.status in {JobStatus.AWAITING_APPROVAL, JobStatus.COMPLETED,
+                      JobStatus.FAILED, JobStatus.CANCELLED}:
+        log.info("ignoring batch poll %s; job %s is %s", batch_id, job_id, job.status)
+        return
+    if job.batch_id and job.batch_id != batch_id and job.status == JobStatus.AWAITING_BATCH:
+        log.info("ignoring stale batch poll %s for %s (current %s)",
+                 batch_id, job_id, job.batch_id)
+        return
+
     try:
         status = poll_batch(batch_id)
     except Exception as exc:

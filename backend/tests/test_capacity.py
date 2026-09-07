@@ -21,7 +21,7 @@ def test_high_cpu_box_raises_file_and_celery_workers():
     assert plan.file_concurrency <= 64
     assert plan.celery_concurrency <= 16
     assert plan.llm_sync_concurrency >= 8
-    assert plan.ocr_inflight >= 6
+    assert 3 <= plan.ocr_inflight <= 5
     assert 2 <= plan.ocr_page_workers <= 4
 
 
@@ -29,7 +29,7 @@ def test_this_mac_plan_is_three_parse_workers_of_four_threads():
     plan = plan_capacity(HardwareProfile(cpu_count=10, memory_bytes=8 * 1024**3, gpus=()))
     assert plan.parse_workers == 3
     assert plan.parse_threads == 4
-    assert plan.ocr_inflight == 5
+    assert plan.ocr_inflight == 3
     assert plan.parse_workers * plan.parse_threads == 12
 
 
@@ -40,7 +40,8 @@ def test_apple_metal_does_not_use_cuda_ocr_sizing():
         cpu_count=10, memory_bytes=16 * 1024**3,
         gpus=(GpuDevice(index=0, name="RTX", backend="cuda"),),
     ))
-    assert plan.ocr_inflight >= 4
+    assert plan.ocr_inflight == 3
+    assert cuda.ocr_inflight > plan.ocr_inflight
     assert cuda.ocr_page_workers >= plan.ocr_page_workers
     assert cuda.parse_concurrency >= plan.parse_concurrency
 

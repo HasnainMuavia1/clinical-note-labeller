@@ -22,7 +22,7 @@ from ..workspace.archive import extract_archive, is_note_file
 from ..workspace.filetools import FileOp, GuardedFileTools
 from ..workspace.manifest import write_labels_csv, write_manifest, write_output_zip
 from ..workspace.parse_cache import save as save_parse_cache
-from .approvals import approval_payload
+from .approvals import approval_payload, resume_mapping
 from .hydrate import hydrate_files, is_retryable
 from .pool import map_files, skipped
 from .state import JobState
@@ -362,7 +362,7 @@ async def plan_placement_node(state: JobState) -> dict:
     overrides: dict[str, str] = {}
     if low_confidence:
         answer = interrupt(approval_payload("low_confidence", {"files": low_confidence}))
-        overrides = (answer or {}).get("specialties") or {}
+        overrides = resume_mapping(answer, "specialties")
 
     resolved: list[dict] = []
     for record in files:
@@ -410,7 +410,7 @@ async def approval_gate_node(state: JobState) -> dict:
         return {"stage": "approval_gate"}
 
     answer = interrupt(approval_payload("overwrite", {"ops": guarded}))
-    decisions = (answer or {}).get("decisions") or {}
+    decisions = resume_mapping(answer, "decisions")
     approved_targets = {t for t, d in decisions.items() if d == "approve"}
 
     tools = _tools(state)

@@ -65,7 +65,7 @@ services:
     build: ./sandbox
     environment:
       OCR_WORKERS: ${OCR_WORKERS:-0}
-      OCR_SLOTS: ${OCR_SLOTS:-0}
+      OCR_SLOTS: ${OCR_SLOTS:-3}
       SANDBOX_WORKERS: ${SANDBOX_WORKERS:-1}
       OMP_NUM_THREADS: 1
     networks: [sandboxnet]

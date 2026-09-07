@@ -219,6 +219,34 @@ def test_failed_openai_batch_resumes_instead_of_failing_the_job(repo, monkeypatc
     assert repo.get_job("j1").status != JobStatus.FAILED
 
 
+def test_poll_batch_ignored_while_awaiting_approval(repo, monkeypatch):
+    """A late batch must not resume into a low-confidence interrupt with a list."""
+    resumed = []
+    polled = []
+    repo.update_job("j1", status=JobStatus.AWAITING_APPROVAL, batch_id="batch-old")
+    monkeypatch.setattr("app.specialty.classifier.poll_batch",
+                        lambda bid: polled.append(bid) or "completed")
+    monkeypatch.setattr(tasks_module.resume_job_task, "delay",
+                        lambda job_id, value: resumed.append((job_id, value)))
+    tasks_module.poll_batch_task.run("j1", "batch-old")
+    assert polled == []
+    assert resumed == []
+    assert repo.get_job("j1").status == JobStatus.AWAITING_APPROVAL
+
+
+def test_poll_batch_ignores_stale_batch_id_while_awaiting_batch(repo, monkeypatch):
+    resumed = []
+    polled = []
+    repo.update_job("j1", status=JobStatus.AWAITING_BATCH, batch_id="batch-new")
+    monkeypatch.setattr("app.specialty.classifier.poll_batch",
+                        lambda bid: polled.append(bid) or "completed")
+    monkeypatch.setattr(tasks_module.resume_job_task, "delay",
+                        lambda job_id, value: resumed.append((job_id, value)))
+    tasks_module.poll_batch_task.run("j1", "batch-old")
+    assert polled == []
+    assert resumed == []
+
+
 def test_poll_batch_exception_eventually_resumes(repo, monkeypatch):
     resumed = []
 

@@ -93,7 +93,8 @@ def plan_capacity(hardware: HardwareProfile,
         ocr_inflight = min(32, max(8, cuda_n * 8, cpus))
     else:
         ocr_page_workers = min(4, max(2, cpus // 4 or 2))
-        ocr_inflight = min(8, max(2, cpus // 2))
+        # Fewer parallel scans on CPU so a 20-page packet can finish before timeout.
+        ocr_inflight = min(4, max(2, cpus // 3))
 
     return CapacityPlan(
         file_concurrency=file_c,
